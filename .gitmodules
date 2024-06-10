@@ -1,0 +1,6 @@
+[submodule "ext/Peanut-GB"]
+	path = ext/Peanut-GB
+	url = https://github.com/deltabeard/Peanut-GB.git
+[submodule "ext/minigb_apu"]
+	path = ext/minigb_apu
+	url = https://github.com/deltabeard/minigb_apu.git
