@@ -16,8 +16,12 @@
 #include <muteki/ui/views/filepicker.h>
 #include <muteki/ui/views/messagebox.h>
 
-#include "peanut_gb.h"
 #include "minigb_apu.h"
+#include "peanut_gb.h"
+
+#ifndef AUDIO_SAMPLES_TOTAL
+#define AUDIO_SAMPLES_TOTAL AUDIO_SAMPLES * 2
+#endif
 
 /* TODO make non-OS-specific lcd draw function (detect board type and write
    Nuvoton registers directly from converted buffer? Or better, from pixel[160]
@@ -29,7 +33,7 @@ typedef void (*lcd_draw_callback)(
     short xsize,
     short ysize
 );
-const lcd_draw_callback ca106_lcd_draw = (lcd_draw_callback) 0x300214dc;
+static const lcd_draw_callback ca106_lcd_draw = (lcd_draw_callback) 0x300214dc;
 
 const int PALETTE_P4[16] = {
   0x000000, 0x111111, 0x222222, 0x333333,
@@ -50,16 +54,15 @@ const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
 volatile short pressing0 = 0, pressing1 = 0;
 volatile uint8_t audio_buffer_states = 0;
 volatile bool audio_running = false;
-int16_t audio_buffer[2][1024];
-event_t *audio_shutdown_ack;
+int16_t audio_buffer[2][AUDIO_SAMPLES_TOTAL];
+thread_t *audio_worker_inst = NULL;
+event_t *audio_shutdown_ack = NULL;
 
 struct priv_s {
   /* Pointer to allocated memory holding GB file. */
   uint8_t *rom;
   /* Pointer to allocated memory holding save file. */
   uint8_t *cart_ram;
-
-  struct minigb_apu_ctx *apu;
 
   /* Framebuffer objects. */
   lcd_surface_t *fb;
@@ -114,7 +117,7 @@ static void _ext_ticker() {
   }
 }
 
-static void _audio_worker(void *user_data) {
+static int _audio_worker(void *user_data) {
   (void) user_data;
 
   OSResetEvent(audio_shutdown_ack);
@@ -125,29 +128,28 @@ static void _audio_worker(void *user_data) {
   size_t actual_size;
   pcm_codec_context_t *pcmdesc = NULL;
   devio_descriptor_t *pcmdev = DEVIO_DESC_INVALID;
-  int16_t stretch_buffer[2];
 
   pcmdesc = OpenPCMCodec(DIRECTION_OUT, AUDIO_SAMPLE_RATE, FORMAT_PCM_STEREO);
   if (pcmdesc == NULL) {
     audio_running = false;
-    return;
+    return 0;
   }
 
   pcmdev = CreateFile("\\\\?\\PCM", 0, 0, NULL, 3, 0, NULL);
   if (pcmdev == NULL || pcmdev == DEVIO_DESC_INVALID) {
     ClosePCMCodec(pcmdesc);
     audio_running = false;
-    return;
+    return 0;
   }
 
   while (audio_running) {
     uint8_t cbuf = audio_buffer_states & 1;
     if (audio_buffer_states == 0 || audio_buffer_states == 3) {
-      WriteFile(pcmdev, audio_buffer[cbuf], AUDIO_SAMPLES_TOTAL, &actual_size, NULL);
+      WriteFile(pcmdev, audio_buffer[cbuf], AUDIO_SAMPLES_TOTAL * 2, &actual_size, NULL);
+      audio_buffer_states ^= 2;
     } else {
-      stretch_buffer[0] = audio_buffer[cbuf][AUDIO_SAMPLES_TOTAL - 2];
-      stretch_buffer[1] = audio_buffer[cbuf][AUDIO_SAMPLES_TOTAL - 1];
-      WriteFile(pcmdev, stretch_buffer, sizeof(stretch_buffer), &actual_size, NULL);
+      /* Yield from thread for more audio data. */
+      OSSleep(1);
     }
   }
 
@@ -159,6 +161,8 @@ static void _audio_worker(void *user_data) {
   }
 
   OSSetEvent(audio_shutdown_ack);
+
+  return 0;
 }
 
 static inline void _drain_all_events() {
@@ -432,6 +436,11 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   audio_running = false;
   while (OSWaitForEvent(audio_shutdown_ack, 1000) != WAIT_RESULT_RESOLVED) {};
   OSCloseEvent(audio_shutdown_ack);
+  OSSleep(1);
+  if (audio_worker_inst != NULL) {
+    OSTerminateThread(audio_worker_inst, 0);
+    audio_worker_inst = NULL;
+  }
 
   free(priv->rom);
   if (priv->cart_ram != NULL) {
@@ -521,6 +530,12 @@ static void loop(struct gb_s * const gb) {
     }
     gb->direct.joypad = ~(_map_pad_state(pressing0) | _map_pad_state(pressing1));
     gb_run_frame(gb);
+    if (audio_buffer_states == 1 || audio_buffer_states == 2) {
+      audio_callback(NULL, (uint8_t *) audio_buffer[(audio_buffer_states & 2) >> 1], AUDIO_SAMPLES_TOTAL * 2);
+      audio_buffer_states ^= 1;
+    } else {
+      OSSleep(1);
+    }
 
     if (priv->fallback_blit) {
       _BitBlt(priv->real_fb, priv->x, priv->y, priv->width, priv->height, priv->fb, 0, 0, BLIT_NONE);
@@ -531,7 +546,7 @@ static void loop(struct gb_s * const gb) {
       _write_save(gb, priv->save_file_name);
       auto_save_counter = 0;
     }
-    
+
     /* Calculate frame advance time */
     short frame_advance = (frame_advance_cnt == 0) ? 16 : 17;
     frame_advance_cnt++;
@@ -554,7 +569,6 @@ static void loop(struct gb_s * const gb) {
 
 int main(void) {
   static struct gb_s gb;
-  static struct minigb_apu_ctx apu;
   static struct priv_s priv = {0};
 
   audio_shutdown_ack = OSCreateEvent(true, 1);
@@ -609,8 +623,7 @@ int main(void) {
   }
   }
 
-  audio_init(&apu);
-  priv.apu = &apu;
+  audio_init();
 
   if (gb_get_save_size(&gb) != 0) {
     priv.cart_ram = _read_file(priv.save_file_name, gb_get_save_size(&gb), true);
@@ -651,6 +664,7 @@ int main(void) {
 
   _set_blit_parameter(&gb, lcd->surface);
   _precompute_yoff(&gb);
+  audio_worker_inst = OSCreateThread(&_audio_worker, NULL, 8192, false);
 
   _direct_input_sim_begin(&gb);
   loop(&gb);
@@ -658,9 +672,15 @@ int main(void) {
 
   _write_save(&gb, priv.save_file_name);
 
+  /* TODO: move this to its own function so we can cleanly disable audio emulation. */
   audio_running = false;
   while (OSWaitForEvent(audio_shutdown_ack, 1000) != WAIT_RESULT_RESOLVED) {};
   OSCloseEvent(audio_shutdown_ack);
+  OSSleep(1);
+  if (audio_worker_inst != NULL) {
+    OSTerminateThread(audio_worker_inst, 0);
+    audio_worker_inst = NULL;
+  }
 
   free(priv.rom);
   if (priv.cart_ram != NULL) {

@@ -4,8 +4,8 @@ project('Peanut-GB', 'c',
 
 elf2bestape = find_program('elf2bestape')
 
-#add_global_arguments('-DENABLE_SOUND=1', language : 'c')
-add_global_arguments('-DAUDIO_SAMPLE_RATE=44100', language : 'c')
+add_global_arguments('-DENABLE_SOUND=1', language : 'c')
+#add_global_arguments('-DAUDIO_SAMPLE_RATE=44100', language : 'c')
 
 subdir('ext')
 subdir('src')
