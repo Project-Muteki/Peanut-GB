@@ -3,8 +3,11 @@
 #include <stdio.h>
 #include <sys/stat.h>
 
+#include <muteki/audio.h>
 #include <muteki/datetime.h>
+#include <muteki/devio.h>
 #include <muteki/system.h>
+#include <muteki/threading.h>
 #include <muteki/utf16.h>
 #include <muteki/utils.h>
 #include <muteki/ui/canvas.h>
@@ -45,12 +48,18 @@ const key_press_event_config_t KEY_EVENT_CONFIG_DRAIN = {65535, 65535, 1};
 const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
 
 volatile short pressing0 = 0, pressing1 = 0;
+volatile uint8_t audio_buffer_states = 0;
+volatile bool audio_running = false;
+int16_t audio_buffer[2][1024];
+event_t *audio_shutdown_ack;
 
 struct priv_s {
   /* Pointer to allocated memory holding GB file. */
   uint8_t *rom;
   /* Pointer to allocated memory holding save file. */
   uint8_t *cart_ram;
+
+  struct minigb_apu_ctx *apu;
 
   /* Framebuffer objects. */
   lcd_surface_t *fb;
@@ -103,6 +112,53 @@ static void _ext_ticker() {
     pressing0 = 0;
     pressing1 = 0;
   }
+}
+
+static void _audio_worker(void *user_data) {
+  (void) user_data;
+
+  OSResetEvent(audio_shutdown_ack);
+
+  audio_running = true;
+  audio_buffer_states = 1;
+
+  size_t actual_size;
+  pcm_codec_context_t *pcmdesc = NULL;
+  devio_descriptor_t *pcmdev = DEVIO_DESC_INVALID;
+  int16_t stretch_buffer[2];
+
+  pcmdesc = OpenPCMCodec(DIRECTION_OUT, AUDIO_SAMPLE_RATE, FORMAT_PCM_STEREO);
+  if (pcmdesc == NULL) {
+    audio_running = false;
+    return;
+  }
+
+  pcmdev = CreateFile("\\\\?\\PCM", 0, 0, NULL, 3, 0, NULL);
+  if (pcmdev == NULL || pcmdev == DEVIO_DESC_INVALID) {
+    ClosePCMCodec(pcmdesc);
+    audio_running = false;
+    return;
+  }
+
+  while (audio_running) {
+    uint8_t cbuf = audio_buffer_states & 1;
+    if (audio_buffer_states == 0 || audio_buffer_states == 3) {
+      WriteFile(pcmdev, audio_buffer[cbuf], AUDIO_SAMPLES_TOTAL, &actual_size, NULL);
+    } else {
+      stretch_buffer[0] = audio_buffer[cbuf][AUDIO_SAMPLES_TOTAL - 2];
+      stretch_buffer[1] = audio_buffer[cbuf][AUDIO_SAMPLES_TOTAL - 1];
+      WriteFile(pcmdev, stretch_buffer, sizeof(stretch_buffer), &actual_size, NULL);
+    }
+  }
+
+  if (pcmdev != NULL && pcmdev != DEVIO_DESC_INVALID) {
+    CloseHandle(pcmdev);
+  }
+  if (pcmdesc != NULL) {
+    ClosePCMCodec(pcmdesc);
+  }
+
+  OSSetEvent(audio_shutdown_ack);
 }
 
 static inline void _drain_all_events() {
@@ -373,6 +429,10 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   MessageBox(error_msg_w, MB_ICON_ERROR | MB_BUTTON_OK);
 
   /* Free memory and then exit. */
+  audio_running = false;
+  while (OSWaitForEvent(audio_shutdown_ack, 1000) != WAIT_RESULT_RESOLVED) {};
+  OSCloseEvent(audio_shutdown_ack);
+
   free(priv->rom);
   if (priv->cart_ram != NULL) {
     free(priv->cart_ram);
@@ -494,7 +554,10 @@ static void loop(struct gb_s * const gb) {
 
 int main(void) {
   static struct gb_s gb;
+  static struct minigb_apu_ctx apu;
   static struct priv_s priv = {0};
+
+  audio_shutdown_ack = OSCreateEvent(true, 1);
 
   int file_picker_result = rom_file_picker(&priv);
   if (file_picker_result > 0) {
@@ -546,6 +609,9 @@ int main(void) {
   }
   }
 
+  audio_init(&apu);
+  priv.apu = &apu;
+
   if (gb_get_save_size(&gb) != 0) {
     priv.cart_ram = _read_file(priv.save_file_name, gb_get_save_size(&gb), true);
     if (priv.cart_ram == NULL) {
@@ -591,6 +657,10 @@ int main(void) {
   _direct_input_sim_end(&gb);
 
   _write_save(&gb, priv.save_file_name);
+
+  audio_running = false;
+  while (OSWaitForEvent(audio_shutdown_ack, 1000) != WAIT_RESULT_RESOLVED) {};
+  OSCloseEvent(audio_shutdown_ack);
 
   free(priv.rom);
   if (priv.cart_ram != NULL) {
