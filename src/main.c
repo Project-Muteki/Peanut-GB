@@ -97,8 +97,10 @@ struct priv_s {
   /* Backup of key press event parameters. */
   key_press_event_config_t old_hold_cfg;
 
-  /* Direct Input Simulation (DIS) state. */
+  /* Direct Input Simulation (DIS) and sound emulation state. */
   bool dis_active;
+  bool sound_on;
+
   /* Use fallback blit algorithm. */
   bool fallback_blit;
 
@@ -189,6 +191,9 @@ static int _tim1_emulator_worker(void *user_data) {
   (void) user_data;
 
   OSResetEvent(tim1_shutdown_ack);
+
+  tim1_emulator_running = true;
+
   while (tim1_emulator_running) {
     _ext_ticker();
     OSSleep(30);
@@ -217,7 +222,6 @@ static void _direct_input_sim_begin(struct gb_s *gb) {
   if (!priv->dis_active) {
     GetSysKeyState(&priv->old_hold_cfg);
 
-    tim1_emulator_running = true;
     tim1_shutdown_ack = OSCreateEvent(true, 1);
     tim1_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &tim1_worker_arg, 16384, false);
 
@@ -245,6 +249,33 @@ static void _direct_input_sim_end(struct gb_s *gb) {
 
     SetSysKeyState(&priv->old_hold_cfg);
     priv->dis_active = false;
+  }
+}
+
+static void _sound_on(struct gb_s *gb) {
+  struct priv_s *priv = gb->direct.priv;
+
+  if (!priv->sound_on) {
+    audio_shutdown_ack = OSCreateEvent(true, 1);
+    audio_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &audio_worker_arg, 16384, false);
+    OSSleep(1);
+    priv->sound_on = true;
+  }
+}
+
+static void _sound_off(struct gb_s *gb) {
+  struct priv_s *priv = gb->direct.priv;
+
+  if (priv->sound_on) {
+    audio_running = false;
+    while (OSWaitForEvent(audio_shutdown_ack, 1000) != WAIT_RESULT_RESOLVED) {};
+    OSCloseEvent(audio_shutdown_ack);
+    OSSleep(1);
+    if (audio_worker_inst != NULL) {
+      OSTerminateThread(audio_worker_inst, 0);
+      audio_worker_inst = NULL;
+    }
+    priv->sound_on = false;
   }
 }
 
@@ -401,7 +432,7 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
       (COLOR_MAP[pixels[x + 1] & 3] & 0xf)
     );
   }
-  
+
   (*ca106_lcd_draw)(priv->fb, priv->x & 0xfffe, priv->y + line, LCD_WIDTH, 1);
 }
 
@@ -481,14 +512,7 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   MessageBox(error_msg_w, MB_ICON_ERROR | MB_BUTTON_OK);
 
   /* Free memory and then exit. */
-  audio_running = false;
-  while (OSWaitForEvent(audio_shutdown_ack, 1000) != WAIT_RESULT_RESOLVED) {};
-  OSCloseEvent(audio_shutdown_ack);
-  OSSleep(1);
-  if (audio_worker_inst != NULL) {
-    OSTerminateThread(audio_worker_inst, 0);
-    audio_worker_inst = NULL;
-  }
+  _sound_off(gb);
 
   free(priv->rom);
   if (priv->cart_ram != NULL) {
@@ -568,7 +592,7 @@ static int rom_file_picker(struct priv_s * const priv) {
   for (unsigned int i = 0; i <= strlen(SAVE_FILE_SUFFIX); i++) {
     *(str_replace++) = SAVE_FILE_SUFFIX[i];
   }
-  
+
   return 0;
 }
 
@@ -578,6 +602,7 @@ static void loop(struct gb_s * const gb) {
   int last_millis = 0;
   short frame_advance_cnt = 0;
   short auto_save_counter = 0;
+  bool holding_mute_key = false;
 
   while (true) {
     GetSysTime(&dt);
@@ -586,13 +611,29 @@ static void loop(struct gb_s * const gb) {
     if (pressing0 == KEY_ESC || pressing1 == KEY_ESC) {
       break;
     }
+
+    if (pressing0 == KEY_M || pressing1 == KEY_M) {
+      if (!holding_mute_key) {
+        if (priv->sound_on) {
+          _sound_off(gb);
+        } else {
+          _sound_on(gb);
+        }
+      }
+      holding_mute_key = true;
+    } else {
+      holding_mute_key = false;
+    }
+
     gb->direct.joypad = ~(_map_pad_state(pressing0) | _map_pad_state(pressing1));
     gb_run_frame(gb);
-    if (audio_buffer_states == 1 || audio_buffer_states == 2) {
-      audio_callback(NULL, (uint8_t *) audio_buffer[(audio_buffer_states & 2) >> 1], AUDIO_SAMPLES_TOTAL * 2);
-      audio_buffer_states ^= 1;
-    } else {
-      OSSleep(1);
+    if (priv->sound_on) {
+      if (audio_buffer_states == 1 || audio_buffer_states == 2) {
+        audio_callback(NULL, (uint8_t *) audio_buffer[(audio_buffer_states & 2) >> 1], AUDIO_SAMPLES_TOTAL * 2);
+        audio_buffer_states ^= 1;
+      } else {
+        OSSleep(1);
+      }
     }
 
     if (priv->fallback_blit) {
@@ -624,8 +665,6 @@ static void loop(struct gb_s * const gb) {
 int main(void) {
   static struct gb_s gb;
   static struct priv_s priv = {0};
-
-  audio_shutdown_ack = OSCreateEvent(true, 1);
 
   int file_picker_result = rom_file_picker(&priv);
   if (file_picker_result > 0) {
@@ -719,7 +758,8 @@ int main(void) {
 
   _set_blit_parameter(&gb, lcd->surface);
   _precompute_yoff(&gb);
-  audio_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &audio_worker_arg, 16384, false);
+
+  _sound_on(&gb);
 
   _direct_input_sim_begin(&gb);
   loop(&gb);
@@ -727,15 +767,7 @@ int main(void) {
 
   _write_save(&gb, priv.save_file_name);
 
-  /* TODO: move this to its own function so we can cleanly disable audio emulation. */
-  audio_running = false;
-  while (OSWaitForEvent(audio_shutdown_ack, 1000) != WAIT_RESULT_RESOLVED) {};
-  OSCloseEvent(audio_shutdown_ack);
-  OSSleep(1);
-  if (audio_worker_inst != NULL) {
-    OSTerminateThread(audio_worker_inst, 0);
-    audio_worker_inst = NULL;
-  }
+  _sound_off(&gb);
 
   free(priv.rom);
   if (priv.cart_ram != NULL) {
