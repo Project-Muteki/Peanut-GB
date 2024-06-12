@@ -463,14 +463,14 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   {
     uint32_t rom_addr;
     rom_addr = (uint32_t)addr * (uint32_t)gb->selected_rom_bank;
-    snprintf(location, sizeof(location),
+    sniprintf(location, sizeof(location),
       " (bank %d mode %d, file offset %" PRIu32 ")",
       gb->selected_rom_bank, gb->cart_mode_select, rom_addr);
   }
 
   instr_byte = __gb_read(gb, addr);
 
-  snprintf(error_msg, sizeof(error_msg),
+  sniprintf(error_msg, sizeof(error_msg),
     "Error: %s at 0x%04X%s with instruction %02X.\n"
     "Cart RAM saved to recovery.sav\n"
     "Exiting.\n",
@@ -657,7 +657,7 @@ int main(void) {
   default: {
     char message[64] = {0};
     UTF16 messagew[64] = {0};
-    snprintf(message, sizeof(message), "Unknown error: %d", gb_ret);
+    sniprintf(message, sizeof(message), "Unknown error: %d", gb_ret);
     ConvStrToUnicode(message, messagew, MB_ENCODING_UTF8);
     MessageBox(messagew, MB_DEFAULT);
     free(priv.rom);
