@@ -6,7 +6,6 @@
 #include <muteki/audio.h>
 #include <muteki/datetime.h>
 #include <muteki/devio.h>
-#include <muteki/system.h>
 #include <muteki/threading.h>
 #include <muteki/utf16.h>
 #include <muteki/utils.h>
@@ -16,12 +15,27 @@
 #include <muteki/ui/views/filepicker.h>
 #include <muteki/ui/views/messagebox.h>
 
+#include <mutekix/threading.h>
+
 #include "minigb_apu.h"
 #include "peanut_gb.h"
 
 #ifndef AUDIO_SAMPLES_TOTAL
 #define AUDIO_SAMPLES_TOTAL AUDIO_SAMPLES * 2
 #endif
+
+static int _audio_worker(void *user_data);
+static int _tim1_emulator_worker(void *user_data);
+
+static mutekix_thread_arg_t audio_worker_arg = {
+  .func = &_audio_worker,
+  .user_data = NULL,
+};
+
+static mutekix_thread_arg_t tim1_worker_arg = {
+  .func = &_tim1_emulator_worker,
+  .user_data = NULL,
+};
 
 /* TODO make non-OS-specific lcd draw function (detect board type and write
    Nuvoton registers directly from converted buffer? Or better, from pixel[160]
@@ -54,9 +68,12 @@ const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
 volatile short pressing0 = 0, pressing1 = 0;
 volatile uint8_t audio_buffer_states = 0;
 volatile bool audio_running = false;
+volatile bool tim1_emulator_running = false;
 int16_t audio_buffer[2][AUDIO_SAMPLES_TOTAL];
 thread_t *audio_worker_inst = NULL;
+thread_t *tim1_worker_inst = NULL;
 event_t *audio_shutdown_ack = NULL;
+event_t *tim1_shutdown_ack = NULL;
 
 struct priv_s {
   /* Pointer to allocated memory holding GB file. */
@@ -96,7 +113,7 @@ static inline bool _test_events_no_shift(ui_event_t *uievent) {
     return TestPendEvent(uievent) || TestKeyEvent(uievent);
 }
 
-static void _ext_ticker() {
+static inline void _ext_ticker() {
   static ui_event_t uievent = {0};
   bool hit = false;
 
@@ -155,12 +172,27 @@ static int _audio_worker(void *user_data) {
 
   if (pcmdev != NULL && pcmdev != DEVIO_DESC_INVALID) {
     CloseHandle(pcmdev);
+    pcmdev = DEVIO_DESC_INVALID;
   }
   if (pcmdesc != NULL) {
     ClosePCMCodec(pcmdesc);
+    pcmdesc = NULL;
   }
 
   OSSetEvent(audio_shutdown_ack);
+
+  return 0;
+}
+
+static int _tim1_emulator_worker(void *user_data) {
+  (void) user_data;
+
+  OSResetEvent(tim1_shutdown_ack);
+  while (tim1_emulator_running) {
+    _ext_ticker();
+    OSSleep(30);
+  }
+  OSSetEvent(tim1_shutdown_ack);
 
   return 0;
 }
@@ -183,8 +215,13 @@ static void _direct_input_sim_begin(struct gb_s *gb) {
   struct priv_s *priv = gb->direct.priv;
   if (!priv->dis_active) {
     GetSysKeyState(&priv->old_hold_cfg);
-    SetTimer1IntHandler(&_ext_ticker, 3);
+
+    tim1_emulator_running = true;
+    tim1_shutdown_ack = OSCreateEvent(true, 1);
+    tim1_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &tim1_worker_arg, 16384, false);
+
     SetSysKeyState(&KEY_EVENT_CONFIG_TURBO);
+    OSSleep(1);
     priv->dis_active = true;
   }
 }
@@ -193,8 +230,18 @@ static void _direct_input_sim_end(struct gb_s *gb) {
   struct priv_s *priv = gb->direct.priv;
   if (priv->dis_active) {
     SetSysKeyState(&KEY_EVENT_CONFIG_DRAIN);
-    SetTimer1IntHandler(NULL, 0);
+
+    tim1_emulator_running = false;
+    while (OSWaitForEvent(tim1_shutdown_ack, 1000) != WAIT_RESULT_RESOLVED) {};
+    OSCloseEvent(tim1_shutdown_ack);
+    OSSleep(1);
+    if (tim1_worker_inst != NULL) {
+      OSTerminateThread(tim1_worker_inst, 0);
+      tim1_worker_inst = NULL;
+    }
+
     _drain_all_events();
+
     SetSysKeyState(&priv->old_hold_cfg);
     priv->dis_active = false;
   }
@@ -558,12 +605,8 @@ static void loop(struct gb_s * const gb) {
     short elapsed_millis = (dt.millis >= last_millis) ? (dt.millis - last_millis) : (1000 + dt.millis - last_millis);
     short sleep_millis = frame_advance - elapsed_millis;
 
-    if (sleep_millis > 0) {
-      OSSleep(sleep_millis);
-    } else {
-      /* Yield from current thread so other threads (like the input poller) can be executed on-time */
-      OSSleep(1);
-    }
+    /* Yield from current thread so other threads (like the input poller) can be executed on-time */
+    OSSleep(sleep_millis > 0 ? sleep_millis : 1);
   }
 }
 
@@ -664,7 +707,7 @@ int main(void) {
 
   _set_blit_parameter(&gb, lcd->surface);
   _precompute_yoff(&gb);
-  audio_worker_inst = OSCreateThread(&_audio_worker, NULL, 8192, false);
+  audio_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &audio_worker_arg, 16384, false);
 
   _direct_input_sim_begin(&gb);
   loop(&gb);
