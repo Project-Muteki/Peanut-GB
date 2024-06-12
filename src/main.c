@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <time.h>
 #include <sys/stat.h>
 
 #include <muteki/audio.h>
@@ -499,6 +500,16 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   exit(1);
 }
 
+static void _set_rtc(struct gb_s *gb) {
+  time_t rawtime;
+  struct tm timeinfo;
+
+  time(&rawtime);
+  localtime_r(&rawtime, &timeinfo);
+
+  gb_set_rtc(gb, &timeinfo);
+}
+
 static int rom_file_picker(struct priv_s * const priv) {
   UTF16 utf16path[260] = {0};
 
@@ -666,6 +677,7 @@ int main(void) {
   }
   }
 
+  _set_rtc(&gb);
   audio_init();
 
   if (gb_get_save_size(&gb) != 0) {
