@@ -7,6 +7,7 @@
 #include <muteki/audio.h>
 #include <muteki/datetime.h>
 #include <muteki/devio.h>
+#include <muteki/ini.h>
 #include <muteki/threading.h>
 #include <muteki/utf16.h>
 #include <muteki/utils.h>
@@ -76,6 +77,13 @@ thread_t *tim1_worker_inst = NULL;
 event_t *audio_shutdown_ack = NULL;
 event_t *tim1_shutdown_ack = NULL;
 
+struct priv_config_s {
+  bool enable_audio;
+  bool interlace;
+  bool half_refresh;
+  bool debug_p4_single_copy_blit;
+};
+
 struct priv_s {
   /* Pointer to allocated memory holding GB file. */
   uint8_t *rom;
@@ -107,6 +115,8 @@ struct priv_s {
   /* Filenames for future reference. */
   char save_file_name[260 * 3 + + sizeof(SAVE_FILE_SUFFIX)];
   char rom_file_name[260 * 3];
+
+  struct priv_config_s config;
 };
 
 static inline bool _test_events_no_shift(ui_event_t *uievent) {
@@ -433,6 +443,7 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
     );
   }
 
+  /* TODO find a way to do this safely on all boards, or create a whitelist of boards. */
   (*ca106_lcd_draw)(priv->fb, priv->x & 0xfffe, priv->y + line, LCD_WIDTH, 1);
 }
 
@@ -666,6 +677,11 @@ int main(void) {
   static struct gb_s gb;
   static struct priv_s priv = {0};
 
+  priv.config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, "pgbcfg.ini");
+  priv.config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, "pgbcfg.ini");
+  priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, "pgbcfg.ini");
+  priv.config.debug_p4_single_copy_blit = !!_GetPrivateProfileInt("Debug", "P4SingleCopyBlit", 0, "pgbcfg.ini");
+
   int file_picker_result = rom_file_picker(&priv);
   if (file_picker_result > 0) {
     return file_picker_result - 1;
@@ -728,25 +744,19 @@ int main(void) {
     }
   }
 
-  switch (lcd->surface->depth) {
-  case LCD_SURFACE_PIXFMT_XRGB:
+  if (lcd->surface->depth == LCD_SURFACE_PIXFMT_XRGB) {
     priv.fb = lcd->surface;
     gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
-    break;
+  } else if (priv.config.debug_p4_single_copy_blit && lcd->surface->depth == LCD_SURFACE_PIXFMT_L4) {
+    /* TODO: 4-bit LCD machines don't have a hardware-backed framebuffer and
+       we need to blit a 160x1 buffer to the screen line-by-line, either
+       somehow using the internal lcd write function or calling _BitBlt(),
+       to be able to take advantage of e.g. interlaced rendering.
 
-  /* TODO: 4-bit LCD machines don't have a hardware-backed framebuffer and
-     we need to blit a 160x1 buffer to the screen line-by-line, either
-     somehow using the internal lcd write function or calling _BitBlt(),
-     to be able to take advantage of e.g. interlaced rendering.
-     Disabling this for now. */
-  /*
-  case LCD_SURFACE_PIXFMT_L4:
+       This only works on CA106 for now. */
     priv.fb = lcd->surface;
     gb_init_lcd(&gb, &lcd_draw_line_fast_p4);
-    break;
-  */
-
-  default: {
+  } else {
     priv.fallback_blit = true;
     priv.fb = (lcd_surface_t *) calloc(GetImageSizeExt(LCD_WIDTH, LCD_HEIGHT, LCD_SURFACE_PIXFMT_L4), 1);
     priv.real_fb = lcd->surface;
@@ -754,12 +764,17 @@ int main(void) {
     memcpy(priv.fb->palette, PALETTE_P4, sizeof(PALETTE_P4));
     gb_init_lcd(&gb, &lcd_draw_line_safe);
   }
-  }
 
   _set_blit_parameter(&gb, lcd->surface);
   _precompute_yoff(&gb);
 
-  _sound_on(&gb);
+  /* TODO make these toggle-able with hotkeys */
+  gb.direct.interlace = priv.config.interlace;
+  gb.direct.frame_skip = priv.config.half_refresh;
+
+  if (priv.config.enable_audio) {
+    _sound_on(&gb);
+  }
 
   _direct_input_sim_begin(&gb);
   loop(&gb);
