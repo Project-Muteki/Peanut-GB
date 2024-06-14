@@ -28,6 +28,7 @@
 
 static int _audio_worker(void *user_data);
 static int _tim1_emulator_worker(void *user_data);
+static int _sched_timer_worker(void *user_data);
 
 static mutekix_thread_arg_t audio_worker_arg = {
   .func = &_audio_worker,
@@ -36,6 +37,11 @@ static mutekix_thread_arg_t audio_worker_arg = {
 
 static mutekix_thread_arg_t tim1_worker_arg = {
   .func = &_tim1_emulator_worker,
+  .user_data = NULL,
+};
+
+static mutekix_thread_arg_t sched_timer_worker_arg = {
+  .func = &_sched_timer_worker,
   .user_data = NULL,
 };
 
@@ -71,9 +77,11 @@ volatile short pressing0 = 0, pressing1 = 0;
 volatile uint8_t audio_buffer_states = 0;
 volatile bool audio_running = false;
 volatile bool tim1_emulator_running = false;
+volatile unsigned short sched_timer_ticks = 0;
 int16_t audio_buffer[2][AUDIO_SAMPLES_TOTAL];
 thread_t *audio_worker_inst = NULL;
 thread_t *tim1_worker_inst = NULL;
+thread_t *sched_timer_worker_inst = NULL;
 event_t *audio_shutdown_ack = NULL;
 event_t *tim1_shutdown_ack = NULL;
 
@@ -81,7 +89,9 @@ struct priv_config_s {
   bool enable_audio;
   bool interlace;
   bool half_refresh;
+  bool use_scheduler_timer;
   bool debug_p4_single_copy_blit;
+  bool debug_show_delay_factor;
 };
 
 struct priv_s {
@@ -117,6 +127,7 @@ struct priv_s {
   char rom_file_name[260 * 3];
 
   struct priv_config_s config;
+
 };
 
 static inline bool _test_events_no_shift(ui_event_t *uievent) {
@@ -213,6 +224,18 @@ static int _tim1_emulator_worker(void *user_data) {
   return 0;
 }
 
+static int _sched_timer_worker(void *user_data) {
+  (void) user_data;
+  while (true) {
+    sched_timer_ticks++;
+    if (sched_timer_ticks >= 1000) {
+      sched_timer_ticks = 0;
+    }
+    OSSleep(1);
+  }
+  return 0;
+}
+
 static inline void _drain_all_events() {
   ui_event_t uievent = {0};
   size_t silence_count = 0;
@@ -286,6 +309,24 @@ static void _sound_off(struct gb_s *gb) {
       audio_worker_inst = NULL;
     }
     priv->sound_on = false;
+  }
+}
+
+static void _sched_timer_start() {
+  if (sched_timer_worker_inst == NULL) {
+    sched_timer_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &sched_timer_worker_arg, 4096, false);
+    for (int i = 0; i < 64; i++) {
+      if (OSSetThreadPriority(sched_timer_worker_inst, i)) {
+        break;
+      }
+    }
+  }
+}
+
+static void _sched_timer_stop() {
+  if (sched_timer_worker_inst != NULL) {
+    OSTerminateThread(sched_timer_worker_inst, 0);
+    sched_timer_worker_inst = NULL;
   }
 }
 
@@ -523,6 +564,7 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   MessageBox(error_msg_w, MB_ICON_ERROR | MB_BUTTON_OK);
 
   /* Free memory and then exit. */
+  _sched_timer_stop();
   _sound_off(gb);
 
   free(priv->rom);
@@ -610,14 +652,23 @@ static int rom_file_picker(struct priv_s * const priv) {
 static void loop(struct gb_s * const gb) {
   const struct priv_s * const priv = gb->direct.priv;
   datetime_t dt;
-  int last_millis = 0;
+  int last_millis = 0, current_millis = 0;
   short frame_advance_cnt = 0;
   short auto_save_counter = 0;
   bool holding_mute_key = false;
+  short delay_factor_counter = 0;
+  int delay_millis_sum = 0;
+
+  bool use_scheduler_timer = priv->config.use_scheduler_timer;
+  bool debug_show_delay_factor = priv->config.debug_show_delay_factor;
 
   while (true) {
-    GetSysTime(&dt);
-    last_millis = dt.millis;
+    if (use_scheduler_timer) {
+      last_millis = sched_timer_ticks;
+    } else {
+      GetSysTime(&dt);
+      last_millis = dt.millis;
+    }
 
     if (pressing0 == KEY_ESC || pressing1 == KEY_ESC) {
       break;
@@ -664,9 +715,25 @@ static void loop(struct gb_s * const gb) {
       frame_advance_cnt = 0;
     }
 
-    GetSysTime(&dt);
-    short elapsed_millis = (dt.millis >= last_millis) ? (dt.millis - last_millis) : (1000 + dt.millis - last_millis);
+    if (use_scheduler_timer) {
+      current_millis = sched_timer_ticks;
+    } else {
+      GetSysTime(&dt);
+      current_millis = dt.millis;
+    }
+
+    short elapsed_millis = (current_millis >= last_millis) ? (current_millis - last_millis) : (1000 + current_millis - last_millis);
     short sleep_millis = frame_advance - elapsed_millis;
+
+    if (debug_show_delay_factor) {
+      delay_millis_sum += sleep_millis;
+      delay_factor_counter++;
+      if (delay_factor_counter >= 32) {
+        PrintfXY(0, 0, "%5d", delay_millis_sum >> 5);
+        delay_factor_counter = 0;
+        delay_millis_sum = 0;
+      }
+    }
 
     /* Yield from current thread so other threads (like the input poller) can be executed on-time */
     OSSleep(sleep_millis > 0 ? sleep_millis : 1);
@@ -680,7 +747,9 @@ int main(void) {
   priv.config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, "pgbcfg.ini");
   priv.config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, "pgbcfg.ini");
   priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, "pgbcfg.ini");
+  priv.config.use_scheduler_timer = !!_GetPrivateProfileInt("Config", "UseSchedulerTimer", 0, "pgbcfg.ini");
   priv.config.debug_p4_single_copy_blit = !!_GetPrivateProfileInt("Debug", "P4SingleCopyBlit", 0, "pgbcfg.ini");
+  priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, "pgbcfg.ini");
 
   int file_picker_result = rom_file_picker(&priv);
   if (file_picker_result > 0) {
@@ -695,6 +764,7 @@ int main(void) {
 
   rgbSetColor(lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 ? 0x000000 : 0xffffff);
   rgbSetBkColor(lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 ? 0xffffff : 0x000000);
+  SetFontType(MONOSPACE_CJK);
   ClearScreen(false);
 
   priv.rom = _read_file(priv.rom_file_name, 0, false);
@@ -776,12 +846,17 @@ int main(void) {
     _sound_on(&gb);
   }
 
+  if (priv.config.use_scheduler_timer) {
+    _sched_timer_start();
+  }
+
   _direct_input_sim_begin(&gb);
   loop(&gb);
   _direct_input_sim_end(&gb);
 
   _write_save(&gb, priv.save_file_name);
 
+  _sched_timer_stop();
   _sound_off(&gb);
 
   free(priv.rom);
