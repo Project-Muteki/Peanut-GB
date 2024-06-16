@@ -314,12 +314,13 @@ static void _sound_off(struct gb_s *gb) {
 
 static void _sched_timer_start() {
   if (sched_timer_worker_inst == NULL) {
-    sched_timer_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &sched_timer_worker_arg, 4096, false);
+    sched_timer_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &sched_timer_worker_arg, 4096, true);
     for (int i = 0; i < 64; i++) {
       if (OSSetThreadPriority(sched_timer_worker_inst, i)) {
         break;
       }
     }
+    OSResumeThread(sched_timer_worker_inst);
   }
 }
 
