@@ -74,11 +74,12 @@ const key_press_event_config_t KEY_EVENT_CONFIG_DRAIN = {65535, 65535, 1};
 const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
 
 volatile short pressing0 = 0, pressing1 = 0;
-volatile uint8_t audio_buffer_states = 0;
+volatile uint8_t audio_buffer_consumer_offset;
+volatile uint8_t audio_buffer_producer_offset;
 volatile bool audio_running = false;
 volatile bool tim1_emulator_running = false;
 volatile unsigned short sched_timer_ticks = 0;
-int16_t audio_buffer[2][AUDIO_SAMPLES_TOTAL];
+int16_t audio_buffer[4][AUDIO_SAMPLES_TOTAL];
 thread_t *audio_worker_inst = NULL;
 thread_t *tim1_worker_inst = NULL;
 thread_t *sched_timer_worker_inst = NULL;
@@ -164,7 +165,6 @@ static int _audio_worker(void *user_data) {
   OSResetEvent(audio_shutdown_ack);
 
   audio_running = true;
-  audio_buffer_states = 1;
 
   size_t actual_size;
   pcm_codec_context_t *pcmdesc = NULL;
@@ -184,10 +184,12 @@ static int _audio_worker(void *user_data) {
   }
 
   while (audio_running) {
-    uint8_t cbuf = audio_buffer_states & 1;
-    if (audio_buffer_states == 0 || audio_buffer_states == 3) {
+    uint8_t cbuf = audio_buffer_consumer_offset;
+    if (cbuf != audio_buffer_producer_offset) {
       WriteFile(pcmdev, audio_buffer[cbuf], AUDIO_SAMPLES_TOTAL * 2, &actual_size, NULL);
-      audio_buffer_states ^= 2;
+      cbuf++;
+      cbuf &= 3;
+      audio_buffer_consumer_offset = cbuf;
     } else {
       /* Yield from thread for more audio data. */
       OSSleep(1);
@@ -289,6 +291,9 @@ static void _sound_on(struct gb_s *gb) {
   struct priv_s *priv = gb->direct.priv;
 
   if (!priv->sound_on) {
+    audio_buffer_consumer_offset = 0;
+    audio_buffer_producer_offset = 0;
+    memset(audio_buffer, 0, sizeof(audio_buffer));
     audio_shutdown_ack = OSCreateEvent(true, 1);
     audio_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &audio_worker_arg, 16384, false);
     OSSleep(1);
@@ -691,11 +696,12 @@ static void loop(struct gb_s * const gb) {
     gb->direct.joypad = ~(_map_pad_state(pressing0) | _map_pad_state(pressing1));
     gb_run_frame(gb);
     if (priv->sound_on) {
-      if (audio_buffer_states == 1 || audio_buffer_states == 2) {
-        audio_callback(NULL, (uint8_t *) audio_buffer[(audio_buffer_states & 2) >> 1], AUDIO_SAMPLES_TOTAL * 2);
-        audio_buffer_states ^= 1;
-      } else {
-        OSSleep(1);
+      uint8_t pbuf = audio_buffer_producer_offset;
+      if (((pbuf + 1) & 3) != audio_buffer_consumer_offset) {
+        audio_callback(NULL, (uint8_t *) audio_buffer[pbuf], AUDIO_SAMPLES_TOTAL * 2);
+        pbuf++;
+        pbuf &= 3;
+        audio_buffer_producer_offset = pbuf;
       }
     }
 
