@@ -23,6 +23,7 @@ A port of Peanut-GB to Besta RTOS.
 | S | Start |
 | R | A+B+Select+Start (soft reset combo key) |
 | M | Toggle sound emulation |
+| H | Hard reset (via `gb_reset()`) |
 | ESC | Quit emulator |
 
 ## Configuration

@@ -674,6 +674,10 @@ static void loop(struct gb_s * const gb) {
       holding_mute_key = false;
     }
 
+    if (pressing0 == KEY_H || pressing1 == KEY_H) {
+      gb_reset(gb);
+    }
+
     gb->direct.joypad = ~(_map_pad_state(pressing0) | _map_pad_state(pressing1));
     gb_run_frame(gb);
     if (priv->sound_on) {
