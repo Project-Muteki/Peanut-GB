@@ -45,18 +45,6 @@ static mutekix_thread_arg_t sched_timer_worker_arg = {
   .user_data = NULL,
 };
 
-/* TODO make non-OS-specific lcd draw function (detect board type and write
-   Nuvoton registers directly from converted buffer? Or better, from pixel[160]
-   to register directly.) */
-typedef void (*lcd_draw_callback)(
-    lcd_surface_t *dst,
-    short xdstoffset,
-    short ydstoffset,
-    short xsize,
-    short ysize
-);
-static const lcd_draw_callback ca106_lcd_draw = (lcd_draw_callback) 0x300214dc;
-
 const int PALETTE_P4[16] = {
   0x000000, 0x111111, 0x222222, 0x333333,
   0x444444, 0x555555, 0x666666, 0x777777,
@@ -122,6 +110,7 @@ struct priv_s {
 
   /* Use fallback blit algorithm. */
   bool fallback_blit;
+  bool p4_1line_buffer;
 
   /* Filenames for future reference. */
   char save_file_name[260 * 3 + + sizeof(SAVE_FILE_SUFFIX)];
@@ -319,13 +308,7 @@ static void _sound_off(struct gb_s *gb) {
 
 static void _sched_timer_start() {
   if (sched_timer_worker_inst == NULL) {
-    sched_timer_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &sched_timer_worker_arg, 4096, true);
-    for (int i = 0; i < 64; i++) {
-      if (OSSetThreadPriority(sched_timer_worker_inst, i)) {
-        break;
-      }
-    }
-    OSResumeThread(sched_timer_worker_inst);
+    sched_timer_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &sched_timer_worker_arg, 4096, false);
   }
 }
 
@@ -484,14 +467,13 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
       break;
     }
     /* TODO: handle misaligned pixels (i.e. when priv->x is odd). */
-    ((uint8_t *) fb->buffer)[priv->yoff[line] + x / 2] = (
+    ((uint8_t *) fb->buffer)[x / 2] = (
       ((COLOR_MAP[pixels[x] & 3] & 0xf) << 4) |
       (COLOR_MAP[pixels[x + 1] & 3] & 0xf)
     );
   }
 
-  /* TODO find a way to do this safely on all boards, or create a whitelist of boards. */
-  (*ca106_lcd_draw)(priv->fb, priv->x & 0xfffe, priv->y + line, LCD_WIDTH, 1);
+  _BitBlt(priv->real_fb, priv->x & 0xfffe, priv->y + line, LCD_WIDTH, 1, priv->fb, 0, 0, BLIT_NONE);
 }
 
 void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
@@ -705,7 +687,7 @@ static void loop(struct gb_s * const gb) {
       }
     }
 
-    if (priv->fallback_blit) {
+    if (priv->fallback_blit && !priv->p4_1line_buffer) {
       _BitBlt(priv->real_fb, priv->x, priv->y, priv->width, priv->height, priv->fb, 0, 0, BLIT_NONE);
     }
 
@@ -825,13 +807,17 @@ int main(void) {
     priv.fb = lcd->surface;
     gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
   } else if (priv.config.debug_p4_single_copy_blit && lcd->surface->depth == LCD_SURFACE_PIXFMT_L4) {
-    /* TODO: 4-bit LCD machines don't have a hardware-backed framebuffer and
+    /* 4-bit LCD machines don't have a hardware-backed framebuffer and
        we need to blit a 160x1 buffer to the screen line-by-line, either
        somehow using the internal lcd write function or calling _BitBlt(),
        to be able to take advantage of e.g. interlaced rendering.
-
-       This only works on CA106 for now. */
-    priv.fb = lcd->surface;
+    */
+    priv.fallback_blit = true;
+    priv.p4_1line_buffer = true;
+    priv.fb = (lcd_surface_t *) calloc(GetImageSizeExt(LCD_WIDTH, 1, LCD_SURFACE_PIXFMT_L4), 1);
+    priv.real_fb = lcd->surface;
+    InitGraphic(priv.fb, LCD_WIDTH, 1, LCD_SURFACE_PIXFMT_L4);
+    memcpy(priv.fb->palette, PALETTE_P4, sizeof(PALETTE_P4));
     gb_init_lcd(&gb, &lcd_draw_line_fast_p4);
   } else {
     priv.fallback_blit = true;
