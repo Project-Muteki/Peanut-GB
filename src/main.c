@@ -79,7 +79,6 @@ struct priv_config_s {
   bool interlace;
   bool half_refresh;
   bool use_scheduler_timer;
-  bool debug_p4_single_copy_blit;
   bool debug_show_delay_factor;
 };
 
@@ -737,7 +736,6 @@ int main(void) {
   priv.config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, "pgbcfg.ini");
   priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, "pgbcfg.ini");
   priv.config.use_scheduler_timer = !!_GetPrivateProfileInt("Config", "UseSchedulerTimer", 0, "pgbcfg.ini");
-  priv.config.debug_p4_single_copy_blit = !!_GetPrivateProfileInt("Debug", "P4SingleCopyBlit", 0, "pgbcfg.ini");
   priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, "pgbcfg.ini");
 
   int file_picker_result = rom_file_picker(&priv);
@@ -806,12 +804,9 @@ int main(void) {
   if (lcd->surface->depth == LCD_SURFACE_PIXFMT_XRGB) {
     priv.fb = lcd->surface;
     gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
-  } else if (priv.config.debug_p4_single_copy_blit && lcd->surface->depth == LCD_SURFACE_PIXFMT_L4) {
+  } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4) {
     /* 4-bit LCD machines don't have a hardware-backed framebuffer and
-       we need to blit a 160x1 buffer to the screen line-by-line, either
-       somehow using the internal lcd write function or calling _BitBlt(),
-       to be able to take advantage of e.g. interlaced rendering.
-    */
+     * we need to blit a 160x1 buffer to the screen line-by-line. */
     priv.fallback_blit = true;
     priv.p4_1line_buffer = true;
     priv.fb = (lcd_surface_t *) calloc(GetImageSizeExt(LCD_WIDTH, 1, LCD_SURFACE_PIXFMT_L4), 1);

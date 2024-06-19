@@ -50,14 +50,6 @@ HalfRefresh = 0
 UseSchedulerTimer = 0
 
 [Debug]
-; For boards based on Nuvoton W55SA7101, copy the pixels to the main
-; framebuffer and write to the LCD afterwards, instead of falling back to safe
-; mode. Currently this is specific to a certain version of the CA106 board,
-; therefore it's for internal testing only and should not be enabled. In the
-; future we may add a more generic version for other boards based on Nuvoton
-; W55SA7101 and move this into [Config].
-P4SingleCopyBlit = 0
-
 ; Show the average number of milliseconds spent on delaying the main loop after
 ; each frame. Updated every 32 frames.
 ShowDelayFactor = 0
