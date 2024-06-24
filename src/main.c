@@ -96,6 +96,7 @@ struct priv_s {
      directly by the fast blit routine. */
   unsigned short x;
   unsigned short y;
+  unsigned short yskip;
   unsigned short width;
   unsigned short height;
   size_t yoff[LCD_HEIGHT];
@@ -455,7 +456,7 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
   const struct priv_s * const priv = gb->direct.priv;
   lcd_surface_t *fb = priv->fb;
 
-  if (line >= priv->height) {
+  if (line >= priv->height + priv->yskip || line < priv->yskip) {
     return;
   }
 
@@ -472,7 +473,7 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
     );
   }
 
-  _BitBlt(priv->real_fb, priv->x & 0xfffe, priv->y + line, LCD_WIDTH, 1, priv->fb, 0, 0, BLIT_NONE);
+  _BitBlt(priv->real_fb, priv->x & 0xfffe, priv->y + line - priv->yskip, LCD_WIDTH, 1, priv->fb, 0, 0, BLIT_NONE);
 }
 
 void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
@@ -530,6 +531,10 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   /* Record save file. */
   _write_save(gb, "recovery.sav");
 
+  /* Stop workers (if they are running). */
+  _sched_timer_stop();
+  _sound_off(gb);
+
   if(addr >= 0x4000 && addr < 0x8000)
   {
     uint32_t rom_addr;
@@ -551,9 +556,6 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   MessageBox(error_msg_w, MB_ICON_ERROR | MB_BUTTON_OK);
 
   /* Free memory and then exit. */
-  _sched_timer_stop();
-  _sound_off(gb);
-
   free(priv->rom);
   if (priv->cart_ram != NULL) {
     free(priv->cart_ram);
@@ -637,7 +639,7 @@ static int rom_file_picker(struct priv_s * const priv) {
 }
 
 static void loop(struct gb_s * const gb) {
-  const struct priv_s * const priv = gb->direct.priv;
+  struct priv_s * const priv = gb->direct.priv;
   datetime_t dt;
   int last_millis = 0, current_millis = 0;
   short frame_advance_cnt = 0;
@@ -672,6 +674,19 @@ static void loop(struct gb_s * const gb) {
       holding_mute_key = true;
     } else {
       holding_mute_key = false;
+    }
+
+    /* Handle vertical scrolling for 240x96 screens. */
+    if (priv->height < LCD_HEIGHT) {
+      if (pressing0 == KEY_PGUP || pressing1 == KEY_PGUP) {
+        if (priv->yskip > 0) {
+          priv->yskip--;
+        }
+      } else if (pressing0 == KEY_PGDN || pressing1 == KEY_PGDN) {
+        if (priv->yskip < LCD_HEIGHT - priv->height) {
+          priv->yskip++;
+        }
+      }
     }
 
     if (pressing0 == KEY_H || pressing1 == KEY_H) {
