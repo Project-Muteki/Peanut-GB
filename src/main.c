@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 #include <sys/stat.h>
 
@@ -113,7 +114,7 @@ struct priv_s {
   bool p4_1line_buffer;
 
   /* Filenames for future reference. */
-  char save_file_name[260 * 3 + + sizeof(SAVE_FILE_SUFFIX)];
+  char save_file_name[260 * 3 + sizeof(SAVE_FILE_SUFFIX)];
   char rom_file_name[260 * 3];
 
   struct priv_config_s config;
@@ -606,16 +607,9 @@ static int rom_file_picker(struct priv_s * const priv) {
 
   free(ctx_out);
 
-  /* TODO proper encoding conversion. */
-  for (size_t i = 0; i < sizeof(priv->rom_file_name); i++) {
-    if (utf16path[i] == 0) {
-      break;
-    }
-    if (utf16path[i] > 0x7f) {
-      return 2;
-    }
-    priv->rom_file_name[i] = utf16path[i] & 0x7f;
-  }
+  if (wcstombs(priv->rom_file_name, utf16path, sizeof(priv->rom_file_name)) == (size_t) -1) {
+    return 2;
+  };
 
   /* Copy the ROM file name to allocated space. */
   strcpy(priv->save_file_name, priv->rom_file_name);
