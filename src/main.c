@@ -680,6 +680,12 @@ static void loop(struct gb_s * const gb) {
         if (priv->yskip < LCD_HEIGHT - priv->height) {
           priv->yskip++;
         }
+      } else if (pressing0_curr == KEY_1 || pressing1_curr == KEY_1) {
+        priv->yskip = 0;
+      } else if (pressing0_curr == KEY_2 || pressing1_curr == KEY_2) {
+        priv->yskip = (LCD_HEIGHT - priv->height) / 2;
+      } else if (pressing0_curr == KEY_3 || pressing1_curr == KEY_3) {
+        priv->yskip = LCD_HEIGHT - priv->height;
       }
     }
 

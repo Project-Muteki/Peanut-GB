@@ -26,6 +26,9 @@ A port of Peanut-GB to Besta RTOS.
 | H | Hard reset (via `gb_reset()`) |
 | Page Up | Scroll screen up (boards with 240x96 4 bit screen only) |
 | Page Down | Scroll screen down (boards with 240x96 4 bit screen only) |
+| 1 | Scroll screen to the top (boards with 240x96 4 bit screen only) |
+| 2 | Scroll screen to the center (boards with 240x96 4 bit screen only) |
+| 3 | Scroll screen to the bottom (boards with 240x96 4 bit screen only) |
 | ESC | Quit emulator |
 
 ## Configuration
