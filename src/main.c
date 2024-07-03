@@ -130,22 +130,32 @@ static inline bool _test_events_no_shift(ui_event_t *uievent) {
 
 static inline void _ext_ticker() {
   static ui_event_t uievent = {0};
+  static uint_fast16_t down_counter = 0;
   bool hit = false;
 
   /* TODO this still seem to lose track presses on BA110. Find out why. */
-  while (_test_events_no_shift(&uievent)) {
-    hit = true;
-    if (GetEvent(&uievent) && uievent.event_type == 0x10) {
-      pressing0 = uievent.key_code0;
-      pressing1 = uievent.key_code1;
-    } else {
-      ClearEvent(&uievent);
+  if (down_counter <= 3) {
+    while (_test_events_no_shift(&uievent)) {
+      hit = true;
+      if (GetEvent(&uievent) && uievent.event_type == 0x10) {
+        pressing0 = uievent.key_code0;
+        pressing1 = uievent.key_code1;
+        down_counter = 7;
+      } else {
+        ClearEvent(&uievent);
+      }
     }
   }
 
   if (!hit) {
-    pressing0 = 0;
-    pressing1 = 0;
+    if (down_counter == 1) {
+      pressing0 = 0;
+      pressing1 = 0;
+      down_counter = 0;
+    }
+    if (down_counter != 0) {
+      down_counter--;
+    }
   }
 }
 
@@ -209,7 +219,7 @@ static int _tim1_emulator_worker(void *user_data) {
 
   while (tim1_emulator_running) {
     _ext_ticker();
-    OSSleep(30);
+    OSSleep(5);
   }
   OSSetEvent(tim1_shutdown_ack);
 
@@ -653,11 +663,14 @@ static void loop(struct gb_s * const gb) {
       last_millis = dt.millis;
     }
 
-    if (pressing0 == KEY_ESC || pressing1 == KEY_ESC) {
+    /* Cache the key code values in register to avoid repeated LDRs. */
+    short pressing0_curr = pressing0, pressing1_curr = pressing1;
+
+    if (pressing0_curr == KEY_ESC || pressing1_curr == KEY_ESC) {
       break;
     }
 
-    if (pressing0 == KEY_M || pressing1 == KEY_M) {
+    if (pressing0_curr == KEY_M || pressing1_curr == KEY_M) {
       if (!holding_mute_key) {
         if (priv->sound_on) {
           _sound_off(gb);
@@ -672,11 +685,11 @@ static void loop(struct gb_s * const gb) {
 
     /* Handle vertical scrolling for 240x96 screens. */
     if (priv->height < LCD_HEIGHT) {
-      if (pressing0 == KEY_PGUP || pressing1 == KEY_PGUP) {
+      if (pressing0_curr == KEY_PGUP || pressing1_curr == KEY_PGUP) {
         if (priv->yskip > 0) {
           priv->yskip--;
         }
-      } else if (pressing0 == KEY_PGDN || pressing1 == KEY_PGDN) {
+      } else if (pressing0_curr == KEY_PGDN || pressing1_curr == KEY_PGDN) {
         if (priv->yskip < LCD_HEIGHT - priv->height) {
           priv->yskip++;
         }
@@ -689,11 +702,11 @@ static void loop(struct gb_s * const gb) {
       }
     }
 
-    if (pressing0 == KEY_H || pressing1 == KEY_H) {
+    if (pressing0_curr == KEY_H || pressing1_curr == KEY_H) {
       gb_reset(gb);
     }
 
-    gb->direct.joypad = ~(_map_pad_state(pressing0) | _map_pad_state(pressing1));
+    gb->direct.joypad = ~(_map_pad_state(pressing0_curr) | _map_pad_state(pressing1_curr));
     gb_run_frame(gb);
     if (priv->sound_on) {
       uint8_t pbuf = audio_buffer_producer_offset;
