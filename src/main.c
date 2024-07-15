@@ -82,6 +82,7 @@ struct priv_config_s {
   bool interlace;
   bool half_refresh;
   bool use_scheduler_timer;
+  bool sram_auto_commit;
   bool debug_show_delay_factor;
 };
 
@@ -656,6 +657,7 @@ static void loop(struct gb_s * const gb) {
 
   bool use_scheduler_timer = priv->config.use_scheduler_timer;
   bool debug_show_delay_factor = priv->config.debug_show_delay_factor;
+  bool sram_auto_commit = priv->config.sram_auto_commit;
 
   while (true) {
     if (use_scheduler_timer) {
@@ -726,7 +728,9 @@ static void loop(struct gb_s * const gb) {
 
     auto_save_counter++;
     if (auto_save_counter > 3600) {
-      _write_save(gb, priv->save_file_name);
+      if (sram_auto_commit) {
+        _write_save(gb, priv->save_file_name);
+      }
       auto_save_counter = 0;
     }
 
@@ -770,6 +774,7 @@ int main(void) {
   priv.config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, "pgbcfg.ini");
   priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, "pgbcfg.ini");
   priv.config.use_scheduler_timer = !!_GetPrivateProfileInt("Config", "UseSchedulerTimer", 0, "pgbcfg.ini");
+  priv.config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, "pgbcfg.ini");
   priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, "pgbcfg.ini");
 
   int file_picker_result = rom_file_picker(&priv);

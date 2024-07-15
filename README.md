@@ -55,6 +55,15 @@ HalfRefresh = 0
 ; accurate RTC (e.g. some S3C2416-based boards).
 UseSchedulerTimer = 0
 
+; Enable perioical SRAM auto-commit (recommended)
+;
+; Some boards have very slow I/O and auto-commit creates noticeable lag spikes
+; on these boards. One can set this to 0 to disable auto-commit. Beware that
+; if auto commit is off, the only time that SRAM will be saved to disk is when
+; the emulator exits, therefore a forced power off, for example, will cause
+; data loss.
+SRAMAutoCommit = 1
+
 [Debug]
 ; Show the average number of milliseconds spent on delaying the main loop after
 ; each frame. Updated every 32 frames.
