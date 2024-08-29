@@ -1,5 +1,5 @@
 project('Peanut-GB', 'c',
-  version : '1.1.1',
+  version : '1.1.2',
   default_options : ['warning_level=3'])
 
 elf2bestape = find_program('elf2bestape')

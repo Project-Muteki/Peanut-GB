@@ -68,10 +68,14 @@ SRAMAutoCommit = 1
 ;
 ; Some boards, like the S3C-based ones, produce a somewhat deterministic lag
 ; on the scheduler timer when some buttons were being held down.
-; The value set here will be added to the current frame time (i.e. subtracted
-; from the calculated delay time) whenever a button press is currently being
-; tracked.
-ButtonHoldCompensation = 0
+; Whenever a button press is currently being tracked, the values set here will
+; be used as a fraction to derive a compensation value, which is then
+; subtracted from the delay factor before the thread goes to sleep for
+; DelayFactor milliseconds (scheduler ticks). In other words, the actual delay
+; factor used by OSSleep at the end of the emulator frame will be calculated by
+; DelayFactor = DelayFactor - FrameTime * Num / Denom.
+ButtonHoldCompensationNum = 1
+ButtonHoldCompensationDenom = 1
 
 [Debug]
 ; Show the average number of milliseconds spent on delaying the main loop after

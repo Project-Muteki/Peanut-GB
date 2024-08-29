@@ -70,6 +70,7 @@ volatile uint8_t audio_buffer_producer_offset;
 volatile bool audio_running = false;
 volatile bool tim1_emulator_running = false;
 volatile unsigned short sched_timer_ticks = 0;
+bool emulate_multi_press = false;
 int16_t audio_buffer[4][AUDIO_SAMPLES_TOTAL];
 thread_t *audio_worker_inst = NULL;
 thread_t *tim1_worker_inst = NULL;
@@ -78,13 +79,15 @@ event_t *audio_shutdown_ack = NULL;
 event_t *tim1_shutdown_ack = NULL;
 
 struct priv_config_s {
-  int button_hold_compensation;
+  short button_hold_compensation_num;
+  short button_hold_compensation_denom;
   bool enable_audio;
   bool interlace;
   bool half_refresh;
   bool use_scheduler_timer;
   bool sram_auto_commit;
   bool debug_show_delay_factor;
+  bool emulate_multi_press;
 };
 
 struct priv_s {
@@ -142,8 +145,17 @@ static inline void _ext_ticker() {
     while (_test_events_no_shift(&uievent)) {
       hit = true;
       if (GetEvent(&uievent) && uievent.event_type == 0x10) {
-        pressing0 = uievent.key_code0;
-        pressing1 = uievent.key_code1;
+        if (emulate_multi_press) {
+          short prev_pressing0 = pressing0, prev_pressing1 = pressing1;
+          if (prev_pressing0 == 0 && prev_pressing1 == 0) {
+            pressing0 = uievent.key_code0;
+          } else if (prev_pressing0 != 0) {
+            pressing1 = uievent.key_code0;
+          }
+        } else {
+          pressing0 = uievent.key_code0;
+          pressing1 = uievent.key_code1;
+        }
         down_counter = 7;
       } else {
         ClearEvent(&uievent);
@@ -659,7 +671,8 @@ static void loop(struct gb_s * const gb) {
   bool use_scheduler_timer = priv->config.use_scheduler_timer;
   bool debug_show_delay_factor = priv->config.debug_show_delay_factor;
   bool sram_auto_commit = priv->config.sram_auto_commit;
-  int button_hold_compensation = priv->config.button_hold_compensation;
+  short button_hold_compensation_num = priv->config.button_hold_compensation_num;
+  short button_hold_compensation_denom = priv->config.button_hold_compensation_denom;
 
   while (true) {
     if (use_scheduler_timer) {
@@ -752,7 +765,11 @@ static void loop(struct gb_s * const gb) {
     }
 
     short elapsed_millis = (current_millis >= last_millis) ? (current_millis - last_millis) : (1000 + current_millis - last_millis);
-    short sleep_millis = frame_advance - elapsed_millis - (holding_any_key ? button_hold_compensation : 0);
+    short sleep_millis = frame_advance - elapsed_millis;
+
+    if (holding_any_key && (button_hold_compensation_denom != 1 || button_hold_compensation_denom != 1)) {
+      sleep_millis -= elapsed_millis * button_hold_compensation_num / button_hold_compensation_denom;
+    }
 
     if (debug_show_delay_factor) {
       delay_millis_sum += sleep_millis;
@@ -778,8 +795,18 @@ int main(void) {
   priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, "pgbcfg.ini");
   priv.config.use_scheduler_timer = !!_GetPrivateProfileInt("Config", "UseSchedulerTimer", 0, "pgbcfg.ini");
   priv.config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, "pgbcfg.ini");
-  priv.config.button_hold_compensation = _GetPrivateProfileInt("Config", "ButtonHoldCompensation", 0, "pgbcfg.ini");
+  priv.config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, "pgbcfg.ini") & 0xffff;
+  priv.config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, "pgbcfg.ini") & 0xffff;
+  priv.config.emulate_multi_press = !!_GetPrivateProfileInt("Config", "EmulateMultiPress", 0, "pgbcfg.ini");
   priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, "pgbcfg.ini");
+
+  /* Filter out illegal values that may cause bad behavior. */
+  if (priv.config.button_hold_compensation_num == 0) {
+    priv.config.button_hold_compensation_num = 1;
+  }
+  if (priv.config.button_hold_compensation_denom == 0) {
+    priv.config.button_hold_compensation_denom = 1;
+  }
 
   int file_picker_result = rom_file_picker(&priv);
   if (file_picker_result > 0) {
@@ -880,6 +907,8 @@ int main(void) {
   if (priv.config.use_scheduler_timer) {
     _sched_timer_start();
   }
+
+  emulate_multi_press = priv.config.emulate_multi_press;
 
   _direct_input_sim_begin(&gb);
   loop(&gb);
