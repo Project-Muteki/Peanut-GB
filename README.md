@@ -77,6 +77,20 @@ SRAMAutoCommit = 1
 ButtonHoldCompensationNum = 1
 ButtonHoldCompensationDenom = 1
 
+; Defines the behavior of the input poller when multiple keys were held-down.
+;
+; Currently 2 modes are supported:
+; - Mode 0: Direct Input Simulation (DIS). This is a mode that detects whether
+;   a key was being held down through rapid key-down events that gets emitted
+;   by the OS event producer when the user holds down a key. Maximum of 2 key
+;   presses can be detected on boards that populate both key_code0 and
+;   key_code1 correctly. This is the default behavior.
+; - Mode 1: Use KEY_UP events. This treats a KEY event as a key-down and a
+;   KEY_UP event as a key-up. Works on mainly the S3C-based boards that have
+;   an external keyboard module (like laptop keyboards).
+; - Mode 2: Reserved for HP Prime keypad protocol. Do not use.
+MultiPressMode = 0
+
 [Debug]
 ; Show the average number of milliseconds spent on delaying the main loop after
 ; each frame. Updated every 32 frames.

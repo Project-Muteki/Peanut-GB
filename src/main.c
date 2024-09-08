@@ -29,17 +29,41 @@
 #define AUDIO_SAMPLES_TOTAL AUDIO_SAMPLES * 2
 #endif
 
+typedef enum {
+  MULTI_PRESS_MODE_DIS = 0,
+  MULTI_PRESS_MODE_NATIVE_S3C,
+} multi_press_mode_t;
+
+enum emu_key_e {
+  EMU_KEY_QUIT = 1,
+  EMU_KEY_MUTE = 1 << 1,
+  EMU_KEY_RESET = 1 << 2,
+  EMU_KEY_SCROLL_UP = 1 << 3,
+  EMU_KEY_SCROLL_DOWN = 1 << 4,
+  EMU_KEY_SCROLL_TOP = 1 << 5,
+  EMU_KEY_SCROLL_CENTER = 1 << 6,
+  EMU_KEY_SCROLL_BOTTOM = 1 << 7,
+};
+
 static int _audio_worker(void *user_data);
-static int _tim1_emulator_worker(void *user_data);
+static int _input_dis_worker(void *user_data);
+static int _input_s3c_worker(void *user_data);
 static int _sched_timer_worker(void *user_data);
+static uint8_t _map_emu_key_state(unsigned short key);
+static uint8_t _map_pad_state(unsigned short key);
 
 static mutekix_thread_arg_t audio_worker_arg = {
   .func = &_audio_worker,
   .user_data = NULL,
 };
 
-static mutekix_thread_arg_t tim1_worker_arg = {
-  .func = &_tim1_emulator_worker,
+static mutekix_thread_arg_t input_dis_worker_arg = {
+  .func = &_input_dis_worker,
+  .user_data = NULL,
+};
+
+static mutekix_thread_arg_t input_s3c_worker_arg = {
+  .func = &_input_s3c_worker,
   .user_data = NULL,
 };
 
@@ -62,32 +86,33 @@ const uint8_t COLOR_MAP[4] = {
 const char SAVE_FILE_SUFFIX[] = ".sav";
 
 const key_press_event_config_t KEY_EVENT_CONFIG_DRAIN = {65535, 65535, 1};
+const key_press_event_config_t KEY_EVENT_CONFIG_SUPPRESS = {65535, 65535, 0};
 const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
 
-volatile short pressing0 = 0, pressing1 = 0;
+volatile unsigned int emu_key_state = 0, pad_key_state = 0;
+volatile bool holding_any_key = false;
 volatile uint8_t audio_buffer_consumer_offset;
 volatile uint8_t audio_buffer_producer_offset;
 volatile bool audio_running = false;
 volatile bool tim1_emulator_running = false;
 volatile unsigned short sched_timer_ticks = 0;
-bool emulate_multi_press = false;
 int16_t audio_buffer[4][AUDIO_SAMPLES_TOTAL];
 thread_t *audio_worker_inst = NULL;
-thread_t *tim1_worker_inst = NULL;
+thread_t *input_worker_inst = NULL;
 thread_t *sched_timer_worker_inst = NULL;
 event_t *audio_shutdown_ack = NULL;
-event_t *tim1_shutdown_ack = NULL;
+event_t *input_poller_shutdown_ack = NULL;
 
 struct priv_config_s {
   short button_hold_compensation_num;
   short button_hold_compensation_denom;
+  multi_press_mode_t multi_press_mode;
   bool enable_audio;
   bool interlace;
   bool half_refresh;
   bool use_scheduler_timer;
   bool sram_auto_commit;
   bool debug_show_delay_factor;
-  bool emulate_multi_press;
 };
 
 struct priv_s {
@@ -135,27 +160,45 @@ static inline bool _test_events_no_shift(ui_event_t *uievent) {
     return TestPendEvent(uievent) || TestKeyEvent(uievent);
 }
 
-static inline void _ext_ticker() {
+static inline void _ext_ticker_s3c() {
+  static ui_event_t uievent = {0};
+  unsigned int emu_key_state_local = emu_key_state, pad_key_state_local = pad_key_state;
+
+  /* TODO: what about single-shot events? Do we still need to request (lower rate) event
+     spamming so we know whether a single-shot was held-down? */
+  while ((TestPendEvent(&uievent) || TestKeyEvent(&uievent)) && GetEvent(&uievent)) {
+    if (uievent.event_type == UI_EVENT_TYPE_KEY) {
+      pad_key_state_local |= _map_pad_state(uievent.key_code0);
+      emu_key_state_local |= _map_emu_key_state(uievent.key_code0);
+    } else if (uievent.event_type == UI_EVENT_TYPE_KEY_UP) {
+      pad_key_state_local &= ~_map_pad_state(uievent.key_code0);
+      emu_key_state_local &= ~_map_emu_key_state(uievent.key_code0);
+    } else {
+    ClearEvent(&uievent);
+    }
+  }
+
+  /* BUG: This will cause the scheduler timer compensation to be skipped when an unsupported key was held-down.
+     There's nothing we can do about this at the moment since we can't tell apart which events were
+     single-shot or not. */
+  holding_any_key = pad_key_state_local || emu_key_state_local;
+  pad_key_state = pad_key_state_local;
+  emu_key_state = emu_key_state_local;
+}
+
+static inline void _ext_ticker_dis() {
   static ui_event_t uievent = {0};
   static uint_fast16_t down_counter = 0;
+  static short pressing0 = 0, pressing1 = 0;
   bool hit = false;
 
   /* TODO this still seem to lose track presses on BA110. Find out why. */
   if (down_counter <= 3) {
     while (_test_events_no_shift(&uievent)) {
       hit = true;
-      if (GetEvent(&uievent) && uievent.event_type == 0x10) {
-        if (emulate_multi_press) {
-          short prev_pressing0 = pressing0, prev_pressing1 = pressing1;
-          if (prev_pressing0 == 0 && prev_pressing1 == 0) {
-            pressing0 = uievent.key_code0;
-          } else if (prev_pressing0 != 0) {
-            pressing1 = uievent.key_code0;
-          }
-        } else {
-          pressing0 = uievent.key_code0;
-          pressing1 = uievent.key_code1;
-        }
+      if (GetEvent(&uievent) && uievent.event_type == UI_EVENT_TYPE_KEY) {
+        pressing0 = uievent.key_code0;
+        pressing1 = uievent.key_code1;
         down_counter = 7;
       } else {
         ClearEvent(&uievent);
@@ -173,6 +216,10 @@ static inline void _ext_ticker() {
       down_counter--;
     }
   }
+
+  holding_any_key = pressing0 || pressing1;
+  pad_key_state = _map_pad_state(pressing0) | _map_pad_state(pressing1);
+  emu_key_state = _map_emu_key_state(pressing0) | _map_emu_key_state(pressing1);
 }
 
 static int _audio_worker(void *user_data) {
@@ -226,18 +273,34 @@ static int _audio_worker(void *user_data) {
   return 0;
 }
 
-static int _tim1_emulator_worker(void *user_data) {
+static int _input_dis_worker(void *user_data) {
   (void) user_data;
 
-  OSResetEvent(tim1_shutdown_ack);
+  OSResetEvent(input_poller_shutdown_ack);
 
   tim1_emulator_running = true;
 
   while (tim1_emulator_running) {
-    _ext_ticker();
+    _ext_ticker_dis();
     OSSleep(5);
   }
-  OSSetEvent(tim1_shutdown_ack);
+  OSSetEvent(input_poller_shutdown_ack);
+
+  return 0;
+}
+
+static int _input_s3c_worker(void *user_data) {
+  (void) user_data;
+
+  OSResetEvent(input_poller_shutdown_ack);
+
+  tim1_emulator_running = true;
+
+  while (tim1_emulator_running) {
+    _ext_ticker_s3c();
+    OSSleep(4);
+  }
+  OSSetEvent(input_poller_shutdown_ack);
 
   return 0;
 }
@@ -268,32 +331,44 @@ static inline void _drain_all_events() {
   }
 }
 
-static void _direct_input_sim_begin(struct gb_s *gb) {
+static void _input_poller_begin(struct gb_s *gb) {
   struct priv_s *priv = gb->direct.priv;
   if (!priv->dis_active) {
-    GetSysKeyState(&priv->old_hold_cfg);
+    if (priv->config.multi_press_mode == MULTI_PRESS_MODE_DIS) {
+      GetSysKeyState(&priv->old_hold_cfg);
 
-    tim1_shutdown_ack = OSCreateEvent(true, 1);
-    tim1_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &tim1_worker_arg, 16384, false);
+      input_poller_shutdown_ack = OSCreateEvent(true, 1);
+      input_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &input_dis_worker_arg, 16384, false);
 
-    SetSysKeyState(&KEY_EVENT_CONFIG_TURBO);
-    OSSleep(1);
-    priv->dis_active = true;
+      SetSysKeyState(&KEY_EVENT_CONFIG_TURBO);
+      OSSleep(1);
+      priv->dis_active = true;
+    } else if (priv->config.multi_press_mode == MULTI_PRESS_MODE_NATIVE_S3C) {
+      GetSysKeyState(&priv->old_hold_cfg);
+
+      input_poller_shutdown_ack = OSCreateEvent(true, 1);
+      input_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &input_s3c_worker_arg, 16384, false);
+
+      SetSysKeyState(&KEY_EVENT_CONFIG_SUPPRESS);
+      OSSleep(1);
+      priv->dis_active = true;
+    }
   }
 }
 
-static void _direct_input_sim_end(struct gb_s *gb) {
+static void _input_poller_end(struct gb_s *gb) {
   struct priv_s *priv = gb->direct.priv;
   if (priv->dis_active) {
+    /* TODO do we need to drain the input in S3C mode? */
     SetSysKeyState(&KEY_EVENT_CONFIG_DRAIN);
 
     tim1_emulator_running = false;
-    while (OSWaitForEvent(tim1_shutdown_ack, 1000) != WAIT_RESULT_RESOLVED) {};
-    OSCloseEvent(tim1_shutdown_ack);
+    while (OSWaitForEvent(input_poller_shutdown_ack, 1000) != WAIT_RESULT_RESOLVED) {};
+    OSCloseEvent(input_poller_shutdown_ack);
     OSSleep(1);
-    if (tim1_worker_inst != NULL) {
-      OSTerminateThread(tim1_worker_inst, 0);
-      tim1_worker_inst = NULL;
+    if (input_worker_inst != NULL) {
+      OSTerminateThread(input_worker_inst, 0);
+      input_worker_inst = NULL;
     }
 
     _drain_all_events();
@@ -442,7 +517,30 @@ static void _write_save(struct gb_s *gb, const char *path) {
   fclose(f);
 }
 
-static inline uint8_t _map_pad_state(short key) {
+static uint8_t _map_emu_key_state(unsigned short key) {
+  switch (key) {
+    case KEY_ESC:
+      return EMU_KEY_QUIT;
+    case KEY_M:
+      return EMU_KEY_MUTE;
+    case KEY_H:
+      return EMU_KEY_RESET;
+    case KEY_PGUP:
+      return EMU_KEY_SCROLL_UP;
+    case KEY_PGDN:
+      return EMU_KEY_SCROLL_DOWN;
+    case KEY_1:
+      return EMU_KEY_SCROLL_TOP;
+    case KEY_2:
+      return EMU_KEY_SCROLL_CENTER;
+    case KEY_3:
+      return EMU_KEY_SCROLL_BOTTOM;
+    default:
+      return 0;
+  }
+}
+
+static uint8_t _map_pad_state(unsigned short key) {
   switch (key) {
     case KEY_RIGHT:
       return JOYPAD_RIGHT;
@@ -553,7 +651,7 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   char location[64] = "";
   uint8_t instr_byte;
 
-  _direct_input_sim_end(gb);
+  _input_poller_end(gb);
 
   /* Record save file. */
   _write_save(gb, "recovery.sav");
@@ -683,14 +781,13 @@ static void loop(struct gb_s * const gb) {
     }
 
     /* Cache the key code values in register to avoid repeated LDRs. */
-    short pressing0_curr = pressing0, pressing1_curr = pressing1;
-    bool holding_any_key = pressing0_curr || pressing1_curr;
+    unsigned int emu_key_state_current = emu_key_state;
 
-    if (pressing0_curr == KEY_ESC || pressing1_curr == KEY_ESC) {
+    if (emu_key_state_current & EMU_KEY_QUIT) {
       break;
     }
 
-    if (pressing0_curr == KEY_M || pressing1_curr == KEY_M) {
+    if (emu_key_state_current & EMU_KEY_MUTE) {
       if (!holding_mute_key) {
         if (priv->sound_on) {
           _sound_off(gb);
@@ -705,28 +802,28 @@ static void loop(struct gb_s * const gb) {
 
     /* Handle vertical scrolling for 240x96 screens. */
     if (priv->height < LCD_HEIGHT) {
-      if (pressing0_curr == KEY_PGUP || pressing1_curr == KEY_PGUP) {
+      if (emu_key_state_current & EMU_KEY_SCROLL_UP) {
         if (priv->yskip > 0) {
           priv->yskip--;
         }
-      } else if (pressing0_curr == KEY_PGDN || pressing1_curr == KEY_PGDN) {
+      } else if (emu_key_state_current & EMU_KEY_SCROLL_DOWN) {
         if (priv->yskip < LCD_HEIGHT - priv->height) {
           priv->yskip++;
         }
-      } else if (pressing0_curr == KEY_1 || pressing1_curr == KEY_1) {
+      } else if (emu_key_state_current & EMU_KEY_SCROLL_TOP) {
         priv->yskip = 0;
-      } else if (pressing0_curr == KEY_2 || pressing1_curr == KEY_2) {
+      } else if (emu_key_state_current & EMU_KEY_SCROLL_CENTER) {
         priv->yskip = (LCD_HEIGHT - priv->height) / 2;
-      } else if (pressing0_curr == KEY_3 || pressing1_curr == KEY_3) {
+      } else if (emu_key_state_current & EMU_KEY_SCROLL_BOTTOM) {
         priv->yskip = LCD_HEIGHT - priv->height;
       }
     }
 
-    if (pressing0_curr == KEY_H || pressing1_curr == KEY_H) {
+    if (emu_key_state_current & EMU_KEY_RESET) {
       gb_reset(gb);
     }
 
-    gb->direct.joypad = ~(_map_pad_state(pressing0_curr) | _map_pad_state(pressing1_curr));
+    gb->direct.joypad = ~pad_key_state;
     gb_run_frame(gb);
     if (priv->sound_on) {
       uint8_t pbuf = audio_buffer_producer_offset;
@@ -797,7 +894,7 @@ int main(void) {
   priv.config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, "pgbcfg.ini");
   priv.config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, "pgbcfg.ini") & 0xffff;
   priv.config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, "pgbcfg.ini") & 0xffff;
-  priv.config.emulate_multi_press = !!_GetPrivateProfileInt("Config", "EmulateMultiPress", 0, "pgbcfg.ini");
+  priv.config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, "pgbcfg.ini");
   priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, "pgbcfg.ini");
 
   /* Filter out illegal values that may cause bad behavior. */
@@ -908,11 +1005,9 @@ int main(void) {
     _sched_timer_start();
   }
 
-  emulate_multi_press = priv.config.emulate_multi_press;
-
-  _direct_input_sim_begin(&gb);
+  _input_poller_begin(&gb);
   loop(&gb);
-  _direct_input_sim_end(&gb);
+  _input_poller_end(&gb);
 
   _write_save(&gb, priv.save_file_name);
 
