@@ -7,7 +7,8 @@ elf = executable('Peanut-GB',
   name_suffix: 'elf',
   dependencies: mutekix_lib,
   link_with : ext_lib,
-  install : false)
+  install : false,
+  c_args: ['-DMANUAL_RTC_NEEDED'])
 
 custom_target('Peanut-GB-bestape',
   input: elf,
