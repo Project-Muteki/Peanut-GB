@@ -22,6 +22,18 @@
 
 #define ENABLE_SOUND 1
 
+/* Compat with old Peanut-GB. */
+#ifndef JOYPAD_A
+#define JOYPAD_A            0x01
+#define JOYPAD_B            0x02
+#define JOYPAD_SELECT       0x04
+#define JOYPAD_START        0x08
+#define JOYPAD_RIGHT        0x10
+#define JOYPAD_LEFT         0x20
+#define JOYPAD_UP           0x40
+#define JOYPAD_DOWN         0x80
+#endif
+
 #include "minigb_apu.h"
 #include "peanut_gb.h"
 
@@ -82,6 +94,15 @@ const int PALETTE_P4[16] = {
 const uint8_t COLOR_MAP[4] = {
   0xff, 0xaa, 0x55, 0x00
 };
+
+#if PEANUT_FULL_GBC_SUPPORT
+const uint8_t COLOR_MAP_CGB[32] = {
+  0x00, 0x08, 0x10, 0x19, 0x21, 0x29, 0x31, 0x3a,
+  0x42, 0x4a, 0x52, 0x5a, 0x63, 0x6b, 0x73, 0x7b,
+  0x84, 0x8c, 0x94, 0x9c, 0xa5, 0xad, 0xb5, 0xbd,
+  0xc5, 0xce, 0xd6, 0xde, 0xe6, 0xef, 0xf7, 0xff
+};
+#endif
 
 const char SAVE_FILE_SUFFIX[] = ".sav";
 
@@ -614,11 +635,24 @@ void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const u
       break;
     }
     size_t pixel_offset = priv->yoff[line] + x * 4;
-    /* TODO palette */
-    ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP[pixels[x] & 3];
-    ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP[pixels[x] & 3];
-    ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP[pixels[x] & 3];
-    ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+
+#if PEANUT_FULL_GBC_SUPPORT
+    if (gb->cgb.cgbMode) {
+      uint16_t pixel = gb->cgb.fixPalette[pixels[x]];
+      ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP_CGB[pixel & 0x001f];
+      ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP_CGB[(pixel & 0x03e0) >> 5];
+      ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP_CGB[(pixel & 0x7c00) >> 10];
+      ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+    } else {
+#endif
+      /* TODO palette */
+      ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP[pixels[x] & 3];
+      ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP[pixels[x] & 3];
+      ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP[pixels[x] & 3];
+      ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+#if PEANUT_FULL_GBC_SUPPORT
+    }
+#endif
   }
 }
 
@@ -762,6 +796,9 @@ static void loop(struct gb_s * const gb) {
   int last_millis = 0, current_millis = 0;
   short frame_advance_cnt = 0;
   short auto_save_counter = 0;
+#if MANUAL_RTC_NEEDED
+  short rtc_counter = 0;
+#endif
   bool holding_mute_key = false;
   short delay_factor_counter = 0;
   int delay_millis_sum = 0;
@@ -824,6 +861,7 @@ static void loop(struct gb_s * const gb) {
     }
 
     gb->direct.joypad = ~pad_key_state;
+
     gb_run_frame(gb);
     if (priv->sound_on) {
       uint8_t pbuf = audio_buffer_producer_offset;
@@ -846,6 +884,14 @@ static void loop(struct gb_s * const gb) {
       }
       auto_save_counter = 0;
     }
+
+#if MANUAL_RTC_NEEDED
+    rtc_counter++;
+    if (rtc_counter >= 60) {
+      gb_tick_rtc(gb);
+      rtc_counter -= 60;
+    }
+#endif
 
     /* Calculate frame advance time */
     short frame_advance = (frame_advance_cnt == 0) ? 16 : 17;
