@@ -110,3 +110,7 @@ Some boards, in particular the S3C-based ones, have a high priority input tracki
 ### Writing to LCD framebuffer will not update the LCD
 
 This is seen on W55SA7101-based boards. These boards don't have DMA-backed framebuffer. Calling `_BitBlt` manually on these boards is necessary to actually update the LCD.
+
+### Board-specific multi-press behavior
+
+There doesn't seem to be a standard way of handling the input events, specifically when it comes to handling multiple simultaneous key presses. i.MX233 and W55SA7101 boards use the `key_code0` and `key_code1` fields and therefore are limited to only 2 simultaneous key presses. There's also no release event so one needs to track the repeat press events to simulate the key-down and key-up event. S3C24xx-based boards (except HP Prime) adds release events, but does not populate `key_code1`, and HP Prime uses an extended event format that lays out up to 8 simultaneous presses.
