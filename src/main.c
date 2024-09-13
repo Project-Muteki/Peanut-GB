@@ -62,7 +62,7 @@ static int _audio_worker(void *user_data);
 static int _input_dis_worker(void *user_data);
 static int _input_s3c_worker(void *user_data);
 static int _sched_timer_worker(void *user_data);
-static uint8_t _map_emu_key_state(unsigned short key);
+static unsigned int _map_emu_key_state(unsigned short key);
 static uint8_t _map_pad_state(unsigned short key);
 
 static mutekix_thread_arg_t audio_worker_arg = {
@@ -113,6 +113,7 @@ const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
 
 volatile unsigned int emu_key_state = 0, pad_key_state = 0;
 volatile bool holding_any_key = false;
+volatile bool power_event = false;
 volatile uint8_t audio_buffer_consumer_offset;
 volatile uint8_t audio_buffer_producer_offset;
 volatile bool audio_running = false;
@@ -190,6 +191,9 @@ static inline void _ext_ticker_s3c() {
      spamming so we know whether a single-shot was held-down? */
   while ((TestPendEvent(&uievent) || TestKeyEvent(&uievent)) && GetEvent(&uievent)) {
     if (uievent.event_type == UI_EVENT_TYPE_KEY) {
+      if (uievent.key_code0 == KEY_POWER) {
+        power_event = true;
+      }
       pad_key_state_local |= _map_pad_state(uievent.key_code0);
       emu_key_state_local |= _map_emu_key_state(uievent.key_code0);
     } else if (uievent.event_type == UI_EVENT_TYPE_KEY_UP) {
@@ -537,7 +541,7 @@ static void _write_save(struct gb_s *gb, const char *path) {
   fclose(f);
 }
 
-static uint8_t _map_emu_key_state(unsigned short key) {
+static unsigned int _map_emu_key_state(unsigned short key) {
   switch (key) {
     case KEY_ESC:
       return EMU_KEY_QUIT;
@@ -807,6 +811,7 @@ static void loop(struct gb_s * const gb) {
   bool use_scheduler_timer = priv->config.use_scheduler_timer;
   bool debug_show_delay_factor = priv->config.debug_show_delay_factor;
   bool sram_auto_commit = priv->config.sram_auto_commit;
+  bool got_power_event = false;
   short button_hold_compensation_num = priv->config.button_hold_compensation_num;
   short button_hold_compensation_denom = priv->config.button_hold_compensation_denom;
 
@@ -886,6 +891,17 @@ static void loop(struct gb_s * const gb) {
       holding_save_key = true;
     } else {
       holding_save_key = false;
+    }
+
+    if (power_event) {
+      if (got_power_event) {
+        got_power_event = false;
+      } else {
+        _write_save(gb, priv->save_file_name);
+        auto_save_counter = 0;
+        got_power_event = true;
+      }
+      power_event = false;
     }
 
     auto_save_counter++;
