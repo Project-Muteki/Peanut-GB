@@ -55,6 +55,7 @@ enum emu_key_e {
   EMU_KEY_SCROLL_TOP = 1 << 5,
   EMU_KEY_SCROLL_CENTER = 1 << 6,
   EMU_KEY_SCROLL_BOTTOM = 1 << 7,
+  EMU_KEY_SRAM_COMMIT = 1 << 8,
 };
 
 static int _audio_worker(void *user_data);
@@ -194,8 +195,6 @@ static inline void _ext_ticker_s3c() {
     } else if (uievent.event_type == UI_EVENT_TYPE_KEY_UP) {
       pad_key_state_local &= ~_map_pad_state(uievent.key_code0);
       emu_key_state_local &= ~_map_emu_key_state(uievent.key_code0);
-    } else {
-    ClearEvent(&uievent);
     }
   }
 
@@ -319,7 +318,7 @@ static int _input_s3c_worker(void *user_data) {
 
   while (tim1_emulator_running) {
     _ext_ticker_s3c();
-    OSSleep(4);
+    OSSleep(15);
   }
   OSSetEvent(input_poller_shutdown_ack);
 
@@ -556,6 +555,8 @@ static uint8_t _map_emu_key_state(unsigned short key) {
       return EMU_KEY_SCROLL_CENTER;
     case KEY_3:
       return EMU_KEY_SCROLL_BOTTOM;
+    case KEY_SAVE:
+      return EMU_KEY_SRAM_COMMIT;
     default:
       return 0;
   }
@@ -799,7 +800,7 @@ static void loop(struct gb_s * const gb) {
 #if MANUAL_RTC_NEEDED
   short rtc_counter = 0;
 #endif
-  bool holding_mute_key = false;
+  bool holding_mute_key = false, holding_save_key = false;
   short delay_factor_counter = 0;
   int delay_millis_sum = 0;
 
@@ -875,6 +876,16 @@ static void loop(struct gb_s * const gb) {
 
     if (priv->fallback_blit && !priv->p4_1line_buffer) {
       _BitBlt(priv->real_fb, priv->x, priv->y, priv->width, priv->height, priv->fb, 0, 0, BLIT_NONE);
+    }
+
+    if (emu_key_state_current & EMU_KEY_SRAM_COMMIT) {
+      if (!holding_save_key) {
+        _write_save(gb, priv->save_file_name);
+        auto_save_counter = 0;
+      }
+      holding_save_key = true;
+    } else {
+      holding_save_key = false;
     }
 
     auto_save_counter++;
