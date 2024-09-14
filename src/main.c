@@ -354,6 +354,9 @@ static inline void _drain_all_events() {
 static void _input_poller_begin(struct gb_s *gb) {
   struct priv_s *priv = gb->direct.priv;
   if (!priv->dis_active) {
+    emu_key_state = 0;
+    pad_key_state = 0;
+
     if (priv->config.multi_press_mode == MULTI_PRESS_MODE_DIS) {
       GetSysKeyState(&priv->old_hold_cfg);
 
@@ -394,6 +397,8 @@ static void _input_poller_end(struct gb_s *gb) {
     _drain_all_events();
 
     SetSysKeyState(&priv->old_hold_cfg);
+    emu_key_state = 0;
+    pad_key_state = 0;
     priv->dis_active = false;
   }
 }
