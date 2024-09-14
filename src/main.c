@@ -800,7 +800,7 @@ static void loop(struct gb_s * const gb) {
 #if MANUAL_RTC_NEEDED
   short rtc_counter = 0;
 #endif
-  bool holding_mute_key = false, holding_save_key = false;
+  bool holding_quit_key = false, holding_mute_key = false, holding_save_key = false;
   short delay_factor_counter = 0;
   int delay_millis_sum = 0;
 
@@ -822,7 +822,21 @@ static void loop(struct gb_s * const gb) {
     unsigned int emu_key_state_current = emu_key_state;
 
     if (emu_key_state_current & EMU_KEY_QUIT) {
-      break;
+      if (!holding_quit_key) {
+        holding_quit_key = true;
+        _input_poller_end(gb);
+        unsigned int ret = MessageBox(
+          _BUL("Are you sure you want to quit?"),
+          MB_ICON_QUESTION | MB_BUTTON_YES | MB_BUTTON_NO
+        );
+        if (ret == MB_RESULT_YES) {
+          break;
+        }
+        _input_poller_begin(gb);
+        continue;
+      }
+    } else {
+      holding_quit_key = false;
     }
 
     if (emu_key_state_current & EMU_KEY_MUTE) {
