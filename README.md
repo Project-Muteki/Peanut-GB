@@ -48,12 +48,21 @@ Interlace = 0
 ; Enable frame skip (half refresh rate) mode.
 HalfRefresh = 0
 
-; Use the OS scheduler instead of RTC to time the frames.
+; Select frame limiter type
 ;
+; Type 0: Use the OS scheduler to time the frames.
 ; This is achieved by spawning a high-priority thread that would increment a
 ; counter on every scheduler tick. Useful on boards without a millisecond-level
 ; accurate RTC (e.g. some S3C2416-based boards).
-UseSchedulerTimer = 0
+;
+; Type 1: Use the RTC to time the frames. The millis field is used to determine
+; how long to put the main thread to sleep.
+;
+; Type 2: Use the RTC to time the frames, but treat the unit of millis as half
+; of a millisecond (a quirk on the S3C-based boards) and only do 1 tick sleep
+; in a loop while continually checking the millis value until the requested
+; amount of millisecond elapses.
+FrameLimiterType = 0
 
 ; Enable perioical SRAM auto-commit (recommended)
 ;
