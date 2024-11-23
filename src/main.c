@@ -141,6 +141,7 @@ struct priv_config_s {
   bool half_refresh;
   bool sram_auto_commit;
   bool debug_show_delay_factor;
+  bool debug_force_safe_framebuffer;
 };
 
 struct priv_s {
@@ -1005,6 +1006,7 @@ int main(void) {
   priv.config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, "pgbcfg.ini") & 0xffff;
   priv.config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, "pgbcfg.ini");
   priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, "pgbcfg.ini");
+  priv.config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, "pgbcfg.ini");
 
   /* Filter out illegal values that may cause bad behavior. */
   if (priv.config.button_hold_compensation_num == 0) {
@@ -1077,10 +1079,10 @@ int main(void) {
     }
   }
 
-  if (lcd->surface->depth == LCD_SURFACE_PIXFMT_XRGB) {
+  if (lcd->surface->depth == LCD_SURFACE_PIXFMT_XRGB && !priv.config.debug_force_safe_framebuffer) {
     priv.fb = lcd->surface;
     gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
-  } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4) {
+  } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 && !priv.config.debug_force_safe_framebuffer) {
     /* 4-bit LCD machines don't have a hardware-backed framebuffer and
      * we need to blit a 160x1 buffer to the screen line-by-line. */
     priv.fallback_blit = true;

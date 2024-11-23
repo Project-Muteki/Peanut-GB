@@ -104,6 +104,10 @@ MultiPressMode = 0
 ; Show the average number of milliseconds spent on delaying the main loop after
 ; each frame. Updated every 32 frames.
 ShowDelayFactor = 0
+
+; Use the safe fallback framebuffer setup regardless of availability of faster
+; alternatives (slow).
+ForceSafeFramebuffer = 0
 ```
 
 ## Known board-specific quirks
