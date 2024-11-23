@@ -46,6 +46,12 @@ typedef enum {
   MULTI_PRESS_MODE_NATIVE_S3C,
 } multi_press_mode_t;
 
+typedef enum {
+  FRAME_LIMITER_SCHED = 0,
+  FRAME_LIMITER_RTC,
+  FRAME_LIMITER_RTC_DOUBLE,
+} frame_limiter_type_t;
+
 enum emu_key_e {
   EMU_KEY_QUIT = 1,
   EMU_KEY_MUTE = 1 << 1,
@@ -129,12 +135,13 @@ struct priv_config_s {
   short button_hold_compensation_num;
   short button_hold_compensation_denom;
   multi_press_mode_t multi_press_mode;
+  frame_limiter_type_t frame_limiter_type;
   bool enable_audio;
   bool interlace;
   bool half_refresh;
-  bool use_scheduler_timer;
   bool sram_auto_commit;
   bool debug_show_delay_factor;
+  bool debug_force_safe_framebuffer;
 };
 
 struct priv_s {
@@ -796,6 +803,26 @@ static int rom_file_picker(struct priv_s * const priv) {
   return 0;
 }
 
+static inline void sleep_with_double_rtc(unsigned short ms) {
+  datetime_t dt;
+
+  if (ms >= 499) {
+    return;
+  }
+
+  GetSysTime(&dt);
+  int start = dt.millis;
+  while (true) {
+    OSSleep(1);
+    GetSysTime(&dt);
+    int ticks_elapsed = ((dt.millis < start) ? (1000 + dt.millis - start) : (dt.millis - start));
+    // fudge
+    if (ticks_elapsed >= (ms - 1) * 2) {
+      return;
+    }
+  }
+}
+
 static void loop(struct gb_s * const gb) {
   struct priv_s * const priv = gb->direct.priv;
   datetime_t dt;
@@ -809,14 +836,14 @@ static void loop(struct gb_s * const gb) {
   short delay_factor_counter = 0;
   int delay_millis_sum = 0;
 
-  bool use_scheduler_timer = priv->config.use_scheduler_timer;
+  frame_limiter_type_t frame_limiter_type = priv->config.frame_limiter_type;
   bool debug_show_delay_factor = priv->config.debug_show_delay_factor;
   bool sram_auto_commit = priv->config.sram_auto_commit;
   short button_hold_compensation_num = priv->config.button_hold_compensation_num;
   short button_hold_compensation_denom = priv->config.button_hold_compensation_denom;
 
   while (true) {
-    if (use_scheduler_timer) {
+    if (frame_limiter_type == FRAME_LIMITER_SCHED) {
       last_millis = sched_timer_ticks;
     } else {
       GetSysTime(&dt);
@@ -930,7 +957,7 @@ static void loop(struct gb_s * const gb) {
       frame_advance_cnt = 0;
     }
 
-    if (use_scheduler_timer) {
+    if (frame_limiter_type == FRAME_LIMITER_SCHED) {
       current_millis = sched_timer_ticks;
     } else {
       GetSysTime(&dt);
@@ -938,6 +965,9 @@ static void loop(struct gb_s * const gb) {
     }
 
     short elapsed_millis = (current_millis >= last_millis) ? (current_millis - last_millis) : (1000 + current_millis - last_millis);
+    if (frame_limiter_type == FRAME_LIMITER_RTC_DOUBLE) {
+      elapsed_millis = elapsed_millis / 2;
+    }
     short sleep_millis = frame_advance - elapsed_millis;
 
     if (holding_any_key && (button_hold_compensation_denom != 1 || button_hold_compensation_denom != 1)) {
@@ -955,7 +985,11 @@ static void loop(struct gb_s * const gb) {
     }
 
     /* Yield from current thread so other threads (like the input poller) can be executed on-time */
-    OSSleep(sleep_millis > 0 ? sleep_millis : 1);
+    if (frame_limiter_type == FRAME_LIMITER_RTC_DOUBLE) {
+      sleep_with_double_rtc(sleep_millis > 0 ? sleep_millis : 1);
+    } else {
+      OSSleep(sleep_millis > 0 ? sleep_millis : 1);
+    }
   }
 }
 
@@ -966,12 +1000,13 @@ int main(void) {
   priv.config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, "pgbcfg.ini");
   priv.config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, "pgbcfg.ini");
   priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, "pgbcfg.ini");
-  priv.config.use_scheduler_timer = !!_GetPrivateProfileInt("Config", "UseSchedulerTimer", 0, "pgbcfg.ini");
+  priv.config.frame_limiter_type = _GetPrivateProfileInt("Config", "FrameLimiterType", FRAME_LIMITER_SCHED, "pgbcfg.ini");
   priv.config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, "pgbcfg.ini");
   priv.config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, "pgbcfg.ini") & 0xffff;
   priv.config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, "pgbcfg.ini") & 0xffff;
   priv.config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, "pgbcfg.ini");
   priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, "pgbcfg.ini");
+  priv.config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, "pgbcfg.ini");
 
   /* Filter out illegal values that may cause bad behavior. */
   if (priv.config.button_hold_compensation_num == 0) {
@@ -1044,10 +1079,10 @@ int main(void) {
     }
   }
 
-  if (lcd->surface->depth == LCD_SURFACE_PIXFMT_XRGB) {
+  if (lcd->surface->depth == LCD_SURFACE_PIXFMT_XRGB && !priv.config.debug_force_safe_framebuffer) {
     priv.fb = lcd->surface;
     gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
-  } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4) {
+  } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 && !priv.config.debug_force_safe_framebuffer) {
     /* 4-bit LCD machines don't have a hardware-backed framebuffer and
      * we need to blit a 160x1 buffer to the screen line-by-line. */
     priv.fallback_blit = true;
@@ -1077,7 +1112,7 @@ int main(void) {
     _sound_on(&gb);
   }
 
-  if (priv.config.use_scheduler_timer) {
+  if (priv.config.frame_limiter_type == FRAME_LIMITER_SCHED) {
     _sched_timer_start();
   }
 
