@@ -626,10 +626,25 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
       break;
     }
     /* TODO: handle misaligned pixels (i.e. when priv->x is odd). */
-    ((uint8_t *) fb->buffer)[x / 2] = (
-      ((COLOR_MAP[pixels[x] & 3] & 0xf) << 4) |
-      (COLOR_MAP[pixels[x + 1] & 3] & 0xf)
-    );
+#if PEANUT_FULL_GBC_SUPPORT
+    if (gb->cgb.cgbMode) {
+      uint16_t pixel = gb->cgb.fixPalette[pixels[x]];
+      uint16_t pixel2 = gb->cgb.fixPalette[pixels[x + 1]];
+      uint8_t y = (COLOR_MAP_CGB[pixel & 0x001f] * 54 + COLOR_MAP_CGB[(pixel & 0x03e0) >> 5] * 183 + COLOR_MAP_CGB[(pixel & 0x7c00) >> 10] * 18) >> 8;
+      uint8_t y2 = (COLOR_MAP_CGB[pixel2 & 0x001f] * 54 + COLOR_MAP_CGB[(pixel2 & 0x03e0) >> 5] * 183 + COLOR_MAP_CGB[(pixel2 & 0x7c00) >> 10] * 18) >> 8;
+      ((uint8_t *) fb->buffer)[x / 2] = (
+        ((y >> 4) << 4) |
+        (y2 >> 4)
+      );
+    } else {
+#endif
+      ((uint8_t *) fb->buffer)[x / 2] = (
+        ((COLOR_MAP[pixels[x] & 3] & 0xf) << 4) |
+        (COLOR_MAP[pixels[x + 1] & 3] & 0xf)
+      );
+#if PEANUT_FULL_GBC_SUPPORT
+    }
+#endif
   }
 
   _BitBlt(priv->real_fb, priv->x & 0xfffe, priv->y + line - priv->yskip, LCD_WIDTH, 1, priv->fb, 0, 0, BLIT_NONE);
