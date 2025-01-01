@@ -630,12 +630,9 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
     if (gb->cgb.cgbMode) {
       uint16_t pixel = gb->cgb.fixPalette[pixels[x]];
       uint16_t pixel2 = gb->cgb.fixPalette[pixels[x + 1]];
-      uint8_t y = (COLOR_MAP_CGB[pixel & 0x001f] * 54 + COLOR_MAP_CGB[(pixel & 0x03e0) >> 5] * 183 + COLOR_MAP_CGB[(pixel & 0x7c00) >> 10] * 18) >> 8;
-      uint8_t y2 = (COLOR_MAP_CGB[pixel2 & 0x001f] * 54 + COLOR_MAP_CGB[(pixel2 & 0x03e0) >> 5] * 183 + COLOR_MAP_CGB[(pixel2 & 0x7c00) >> 10] * 18) >> 8;
-      ((uint8_t *) fb->buffer)[x / 2] = (
-        ((y >> 4) << 4) |
-        (y2 >> 4)
-      );
+      uint8_t y = (COLOR_MAP_CGB[pixel & 0x001f] * 18 + COLOR_MAP_CGB[(pixel & 0x03e0) >> 5] * 183 + COLOR_MAP_CGB[(pixel & 0x7c00) >> 10] * 54) >> 12;
+      uint8_t y2 = (COLOR_MAP_CGB[pixel2 & 0x001f] * 18 + COLOR_MAP_CGB[(pixel2 & 0x03e0) >> 5] * 183 + COLOR_MAP_CGB[(pixel2 & 0x7c00) >> 10] * 54) >> 12;
+      ((uint8_t *) fb->buffer)[x / 2] = (y << 4) | (y2 & 0xf);
     } else {
 #endif
       ((uint8_t *) fb->buffer)[x / 2] = (
