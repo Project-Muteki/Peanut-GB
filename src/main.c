@@ -175,8 +175,8 @@ struct priv_s {
   bool p4_1line_buffer;
 
   /* Filenames for future reference. */
-  char save_file_name[260 * 3 + sizeof(SAVE_FILE_SUFFIX)];
-  char rom_file_name[260 * 3];
+  char save_file_name[FILEPICKER_CONTEXT_OUTPUT_MAX_LFN * 3 + sizeof(SAVE_FILE_SUFFIX)];
+  char rom_file_name[FILEPICKER_CONTEXT_OUTPUT_MAX_LFN * 3];
 
   struct priv_config_s config;
 
@@ -761,7 +761,7 @@ static void _set_rtc(struct gb_s *gb) {
 }
 
 static int rom_file_picker(struct priv_s * const priv) {
-  UTF16 utf16path[260] = {0};
+  UTF16 utf16path[FILEPICKER_CONTEXT_OUTPUT_MAX_LFN] = {0};
 
   /* Invoke file picker. */
   filepicker_context_t ctx = {0};
@@ -772,7 +772,7 @@ static int rom_file_picker(struct priv_s * const priv) {
 
   ctx.paths = ctx_out;
   ctx.ctx_size = sizeof(ctx);
-  ctx.unk_0x30 = 0xffff;
+  ctx.path_max_cu = FILEPICKER_CONTEXT_OUTPUT_MAX_LFN;
   ctx.type_list = (
     "Game Boy ROM Files (*.gb, *.gbc)\0*.gb|*.gbc\0"
     "DMG ROM Files (*.gb)\0*.gb\0"
