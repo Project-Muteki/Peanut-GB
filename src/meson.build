@@ -23,7 +23,8 @@ elf = executable('Peanut-GBC',
   dependencies: mutekix_lib,
   link_with : ext_lib,
   install : false,
-  c_args: ['-DPEANUT_FULL_GBC_SUPPORT', '-DMANUAL_RTC_NEEDED'])
+  c_args: ['-DPEANUT_FULL_GBC_SUPPORT', '-DMANUAL_RTC_NEEDED'],
+  build_by_default: false)
 
 custom_target('Peanut-GBC-bestape',
   input: elf,
