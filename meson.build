@@ -3,6 +3,7 @@ project('Peanut-GB', 'c',
   default_options : ['warning_level=3'])
 
 elf2bestape = find_program('elf2bestape')
+romtool = find_program('romtool')
 
 subdir('ext')
 subdir('src')
