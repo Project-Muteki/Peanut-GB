@@ -33,7 +33,7 @@ A port of Peanut-GB to Besta RTOS.
 
 ## Configuration
 
-To configure the emulator, create an ASCII-encoded, Windows line ending INI file named `pgbcfg.ini` under the work directory of the emulator.
+To configure the emulator, create an ASCII-encoded, Windows line-ending INI file named `pgbcfg.ini` under `C:\SYSTEM\muteki` (create one if it does not already exist).
 
 Supported options are as follows:
 
