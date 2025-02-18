@@ -113,6 +113,8 @@ const uint8_t COLOR_MAP_CGB[32] = {
 
 const char SAVE_FILE_SUFFIX[] = ".sav";
 
+const char CONFIG_PATH[] = "C:\\SYSTEM\\muteki\\pgbcfg.ini";
+
 const key_press_event_config_t KEY_EVENT_CONFIG_DRAIN = {65535, 65535, 1};
 const key_press_event_config_t KEY_EVENT_CONFIG_SUPPRESS = {65535, 65535, 0};
 const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
@@ -1009,16 +1011,16 @@ int main(void) {
   static struct gb_s gb;
   static struct priv_s priv = {0};
 
-  priv.config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, "pgbcfg.ini");
-  priv.config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, "pgbcfg.ini");
-  priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, "pgbcfg.ini");
-  priv.config.frame_limiter_type = _GetPrivateProfileInt("Config", "FrameLimiterType", FRAME_LIMITER_SCHED, "pgbcfg.ini");
-  priv.config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, "pgbcfg.ini");
-  priv.config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, "pgbcfg.ini") & 0xffff;
-  priv.config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, "pgbcfg.ini") & 0xffff;
-  priv.config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, "pgbcfg.ini");
-  priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, "pgbcfg.ini");
-  priv.config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, "pgbcfg.ini");
+  priv.config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, CONFIG_PATH);
+  priv.config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, CONFIG_PATH);
+  priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, CONFIG_PATH);
+  priv.config.frame_limiter_type = _GetPrivateProfileInt("Config", "FrameLimiterType", FRAME_LIMITER_SCHED, CONFIG_PATH);
+  priv.config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, CONFIG_PATH);
+  priv.config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, CONFIG_PATH) & 0xffff;
+  priv.config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, CONFIG_PATH) & 0xffff;
+  priv.config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, CONFIG_PATH);
+  priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, CONFIG_PATH);
+  priv.config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, CONFIG_PATH);
 
   /* Filter out illegal values that may cause bad behavior. */
   if (priv.config.button_hold_compensation_num == 0) {
