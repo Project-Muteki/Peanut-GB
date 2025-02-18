@@ -1,0 +1,16 @@
+[rom]
+title = "Peanut-GB Emulator"
+short-title = "Peanut-GB"
+category = "APPLET_GAME"
+subtype = 0
+default-locale = "en"
+copyright = """\
+Copyright (c) 2018-2025 Mahyar Koshkouei
+Copyright (c) 2024-2025 dogtopus
+SPDX-License-Identifier: MIT\
+"""
+version = "1.2.0"
+
+[metadata.en]
+title = "Peanut-GB Emulator"
+short-title = "Peanut-GB"
