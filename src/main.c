@@ -831,7 +831,7 @@ static inline void sleep_with_double_rtc(unsigned short ms) {
     GetSysTime(&dt);
     int ticks_elapsed = ((dt.millis < start) ? (1000 + dt.millis - start) : (dt.millis - start));
     // fudge
-    if (ticks_elapsed >= (ms - 1) * 2) {
+    if (ticks_elapsed >= ms * 2 - 3) {
       return;
     }
   }
