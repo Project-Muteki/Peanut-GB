@@ -19,6 +19,7 @@
 #include <muteki/ui/views/messagebox.h>
 
 #include <mutekix/threading.h>
+#include <mutekix/time.h>
 
 #define ENABLE_SOUND 1
 
@@ -46,12 +47,6 @@ typedef enum {
   MULTI_PRESS_MODE_NATIVE_S3C,
 } multi_press_mode_t;
 
-typedef enum {
-  FRAME_LIMITER_SCHED = 0,
-  FRAME_LIMITER_RTC,
-  FRAME_LIMITER_RTC_DOUBLE,
-} frame_limiter_type_t;
-
 enum emu_key_e {
   EMU_KEY_QUIT = 1,
   EMU_KEY_MUTE = 1 << 1,
@@ -67,7 +62,6 @@ enum emu_key_e {
 static int _audio_worker(void *user_data);
 static int _input_dis_worker(void *user_data);
 static int _input_s3c_worker(void *user_data);
-static int _sched_timer_worker(void *user_data);
 static unsigned int _map_emu_key_state(unsigned short key);
 static uint8_t _map_pad_state(unsigned short key);
 
@@ -83,11 +77,6 @@ static mutekix_thread_arg_t input_dis_worker_arg = {
 
 static mutekix_thread_arg_t input_s3c_worker_arg = {
   .func = &_input_s3c_worker,
-  .user_data = NULL,
-};
-
-static mutekix_thread_arg_t sched_timer_worker_arg = {
-  .func = &_sched_timer_worker,
   .user_data = NULL,
 };
 
@@ -137,7 +126,6 @@ struct priv_config_s {
   short button_hold_compensation_num;
   short button_hold_compensation_denom;
   multi_press_mode_t multi_press_mode;
-  frame_limiter_type_t frame_limiter_type;
   bool enable_audio;
   bool interlace;
   bool half_refresh;
@@ -334,18 +322,6 @@ static int _input_s3c_worker(void *user_data) {
   return 0;
 }
 
-static int _sched_timer_worker(void *user_data) {
-  (void) user_data;
-  while (true) {
-    sched_timer_ticks++;
-    if (sched_timer_ticks >= 1000) {
-      sched_timer_ticks = 0;
-    }
-    OSSleep(1);
-  }
-  return 0;
-}
-
 static inline void _drain_all_events() {
   ui_event_t uievent = {0};
   size_t silence_count = 0;
@@ -439,19 +415,6 @@ static void _sound_off(struct gb_s *gb) {
       audio_worker_inst = NULL;
     }
     priv->sound_on = false;
-  }
-}
-
-static void _sched_timer_start() {
-  if (sched_timer_worker_inst == NULL) {
-    sched_timer_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &sched_timer_worker_arg, 4096, false);
-  }
-}
-
-static void _sched_timer_stop() {
-  if (sched_timer_worker_inst != NULL) {
-    OSTerminateThread(sched_timer_worker_inst, 0);
-    sched_timer_worker_inst = NULL;
   }
 }
 
@@ -718,7 +681,7 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   _write_save(gb, "recovery.sav");
 
   /* Stop workers (if they are running). */
-  _sched_timer_stop();
+  mutekix_time_fini();
   _sound_off(gb);
 
   if(addr >= 0x4000 && addr < 0x8000)
@@ -839,8 +802,7 @@ static inline void sleep_with_double_rtc(unsigned short ms) {
 
 static void loop(struct gb_s * const gb) {
   struct priv_s * const priv = gb->direct.priv;
-  datetime_t dt;
-  int last_millis = 0, current_millis = 0;
+  unsigned long long current_time = 0, last_time = 0;
   short frame_advance_cnt = 0;
   short auto_save_counter = 0;
 #if MANUAL_RTC_NEEDED
@@ -850,19 +812,13 @@ static void loop(struct gb_s * const gb) {
   short delay_factor_counter = 0;
   int delay_millis_sum = 0;
 
-  frame_limiter_type_t frame_limiter_type = priv->config.frame_limiter_type;
   bool debug_show_delay_factor = priv->config.debug_show_delay_factor;
   bool sram_auto_commit = priv->config.sram_auto_commit;
   short button_hold_compensation_num = priv->config.button_hold_compensation_num;
   short button_hold_compensation_denom = priv->config.button_hold_compensation_denom;
 
   while (true) {
-    if (frame_limiter_type == FRAME_LIMITER_SCHED) {
-      last_millis = sched_timer_ticks;
-    } else {
-      GetSysTime(&dt);
-      last_millis = dt.millis;
-    }
+    last_time = mutekix_time_get_ticks();
 
     /* Cache the key code values in register to avoid repeated LDRs. */
     unsigned int emu_key_state_current = emu_key_state;
@@ -971,21 +927,14 @@ static void loop(struct gb_s * const gb) {
       frame_advance_cnt = 0;
     }
 
-    if (frame_limiter_type == FRAME_LIMITER_SCHED) {
-      current_millis = sched_timer_ticks;
-    } else {
-      GetSysTime(&dt);
-      current_millis = dt.millis;
-    }
+    current_time = mutekix_time_get_ticks();
 
-    short elapsed_millis = (current_millis >= last_millis) ? (current_millis - last_millis) : (1000 + current_millis - last_millis);
-    if (frame_limiter_type == FRAME_LIMITER_RTC_DOUBLE) {
-      elapsed_millis = elapsed_millis / 2;
-    }
-    short sleep_millis = frame_advance - elapsed_millis;
+    long long elapsed_time = (mutekix_time_get_quantum() == 500) ? (current_time - last_time) / 2 : current_time - last_time;
+
+    short sleep_millis = frame_advance - elapsed_time;
 
     if (holding_any_key && (button_hold_compensation_denom != 1 || button_hold_compensation_denom != 1)) {
-      sleep_millis -= elapsed_millis * button_hold_compensation_num / button_hold_compensation_denom;
+      sleep_millis -= elapsed_time * button_hold_compensation_num / button_hold_compensation_denom;
     }
 
     if (debug_show_delay_factor) {
@@ -999,7 +948,7 @@ static void loop(struct gb_s * const gb) {
     }
 
     /* Yield from current thread so other threads (like the input poller) can be executed on-time */
-    if (frame_limiter_type == FRAME_LIMITER_RTC_DOUBLE) {
+    if (mutekix_time_get_quantum() == 500) {
       sleep_with_double_rtc(sleep_millis > 0 ? sleep_millis : 1);
     } else {
       OSSleep(sleep_millis > 0 ? sleep_millis : 1);
@@ -1014,7 +963,6 @@ int main(void) {
   priv.config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, CONFIG_PATH);
   priv.config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, CONFIG_PATH);
   priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, CONFIG_PATH);
-  priv.config.frame_limiter_type = _GetPrivateProfileInt("Config", "FrameLimiterType", FRAME_LIMITER_SCHED, CONFIG_PATH);
   priv.config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, CONFIG_PATH);
   priv.config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, CONFIG_PATH) & 0xffff;
   priv.config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, CONFIG_PATH) & 0xffff;
@@ -1125,10 +1073,7 @@ int main(void) {
   if (priv.config.enable_audio) {
     _sound_on(&gb);
   }
-
-  if (priv.config.frame_limiter_type == FRAME_LIMITER_SCHED) {
-    _sched_timer_start();
-  }
+  mutekix_time_init();
 
   _input_poller_begin(&gb);
   loop(&gb);
@@ -1136,7 +1081,7 @@ int main(void) {
 
   _write_save(&gb, priv.save_file_name);
 
-  _sched_timer_stop();
+  mutekix_time_fini();
   _sound_off(&gb);
 
   free(priv.rom);
