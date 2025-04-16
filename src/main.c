@@ -123,6 +123,7 @@ const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
 
 volatile unsigned int emu_key_state = 0, pad_key_state = 0;
 volatile bool holding_any_key = false;
+volatile bool power_event = false;
 volatile uint8_t audio_buffer_consumer_offset;
 volatile uint8_t audio_buffer_producer_offset;
 volatile bool audio_running = false;
@@ -145,9 +146,9 @@ struct priv_config_s {
   bool interlace;
   bool half_refresh;
   bool sram_auto_commit;
+  bool sync_rtc_on_resume;
   bool debug_show_delay_factor;
   bool debug_force_safe_framebuffer;
-  struct key_binding_s *key_binding;
 };
 
 struct priv_s {
@@ -203,8 +204,12 @@ static inline void _ext_ticker_s3c() {
      spamming so we know whether a single-shot was held-down? */
   while ((TestPendEvent(&uievent) || TestKeyEvent(&uievent)) && GetEvent(&uievent)) {
     if (uievent.event_type == UI_EVENT_TYPE_KEY) {
-      pad_key_state_local |= _map_pad_state(uievent.key_code0);
-      emu_key_state_local |= _map_emu_key_state(uievent.key_code0);
+      if (uievent.key_code0 == KEY_POWER) {
+        power_event = true;
+      } else {
+        pad_key_state_local |= _map_pad_state(uievent.key_code0);
+        emu_key_state_local |= _map_emu_key_state(uievent.key_code0);
+      }
     } else if (uievent.event_type == UI_EVENT_TYPE_KEY_UP) {
       pad_key_state_local &= ~_map_pad_state(uievent.key_code0);
       emu_key_state_local &= ~_map_emu_key_state(uievent.key_code0);
@@ -230,9 +235,15 @@ static inline void _ext_ticker_dis() {
     while (_test_events_no_shift(&uievent)) {
       hit = true;
       if (GetEvent(&uievent) && uievent.event_type == UI_EVENT_TYPE_KEY) {
-        pressing0 = uievent.key_code0;
-        pressing1 = uievent.key_code1;
-        down_counter = 7;
+        if (uievent.key_code0 == KEY_POWER || uievent.key_code1 == KEY_POWER) {
+          hit = false;
+          down_counter = 1;
+          power_event = true;
+        } else {
+          pressing0 = uievent.key_code0;
+          pressing1 = uievent.key_code1;
+          down_counter = 7;
+        }
       } else {
         ClearEvent(&uievent);
       }
@@ -830,7 +841,7 @@ static inline void sleep_with_double_rtc(unsigned short ms) {
 
 static void loop(struct gb_s * const gb) {
   struct priv_s * const priv = gb->direct.priv;
-  unsigned long long current_time = 0, last_time = 0;
+  unsigned long long current_time = 0, last_time = 0, power_event_start = 0;
   short frame_advance_cnt = 0;
   short auto_save_counter = 0;
 #if MANUAL_RTC_NEEDED
@@ -846,6 +857,18 @@ static void loop(struct gb_s * const gb) {
   short button_hold_compensation_denom = priv->config.button_hold_compensation_denom;
 
   while (true) {
+    /* Power event handling. */
+    if (power_event) {
+      power_event_start = mutekix_time_get_usecs();
+      power_event = false;
+    }
+    if (power_event_start != 0 && mutekix_time_get_usecs() - power_event_start >= 500000ull) {
+      if (priv->config.sync_rtc_on_resume) {
+        _set_rtc(gb);
+      }
+      power_event_start = 0;
+    }
+
     last_time = mutekix_time_get_ticks();
 
     /* Cache the key code values in register to avoid repeated LDRs. */
@@ -861,6 +884,9 @@ static void loop(struct gb_s * const gb) {
         );
         if (ret == MB_RESULT_YES) {
           break;
+        }
+        if (priv->config.sync_rtc_on_resume) {
+          _set_rtc(gb);
         }
         _input_poller_begin(gb);
         continue;
@@ -992,6 +1018,7 @@ static void _load_config(struct priv_s *priv) {
   priv->config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, CONFIG_PATH) & 0xffff;
   priv->config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, CONFIG_PATH) & 0xffff;
   priv->config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, CONFIG_PATH);
+  priv->config.sync_rtc_on_resume = !!_GetPrivateProfileInt("Config", "SyncRTCOnResume", 0, CONFIG_PATH);
   priv->config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, CONFIG_PATH);
   priv->config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, CONFIG_PATH);
 

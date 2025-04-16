@@ -84,6 +84,11 @@ ButtonHoldCompensationDenom = 1
 ; - Mode 2: Reserved for HP Prime keypad protocol. Do not use.
 MultiPressMode = 0
 
+; Synchronize emulated RTC with the system RTC on emulator resume (i.e. waking
+; up from deep sleep and selecting No on quit confirmation dialog). May cause
+; issues with some games.
+SyncRTCOnResume = 0
+
 [Debug]
 ; Show the average number of milliseconds spent on delaying the main loop after
 ; each frame. Updated every 32 frames.
