@@ -13,6 +13,7 @@
 #include <muteki/utf16.h>
 #include <muteki/utils.h>
 #include <muteki/ui/canvas.h>
+#include <muteki/ui/font.h>
 #include <muteki/ui/event.h>
 #include <muteki/ui/surface.h>
 #include <muteki/ui/views/filepicker.h>
@@ -57,6 +58,18 @@ enum emu_key_e {
   EMU_KEY_SCROLL_CENTER = 1 << 6,
   EMU_KEY_SCROLL_BOTTOM = 1 << 7,
   EMU_KEY_SRAM_COMMIT = 1 << 8,
+};
+
+struct key_binding_s {
+  unsigned short a;
+  unsigned short b;
+  unsigned short select;
+  unsigned short start;
+  unsigned short right;
+  unsigned short left;
+  unsigned short up;
+  unsigned short down;
+  unsigned short reset_combo;
 };
 
 static int _audio_worker(void *user_data);
@@ -122,6 +135,8 @@ thread_t *sched_timer_worker_inst = NULL;
 event_t *audio_shutdown_ack = NULL;
 event_t *input_poller_shutdown_ack = NULL;
 
+static struct key_binding_s g_key_binding = {0};
+
 struct priv_config_s {
   short button_hold_compensation_num;
   short button_hold_compensation_denom;
@@ -132,6 +147,7 @@ struct priv_config_s {
   bool sram_auto_commit;
   bool debug_show_delay_factor;
   bool debug_force_safe_framebuffer;
+  struct key_binding_s *key_binding;
 };
 
 struct priv_s {
@@ -540,28 +556,40 @@ static unsigned int _map_emu_key_state(unsigned short key) {
 }
 
 static uint8_t _map_pad_state(unsigned short key) {
-  switch (key) {
-    case KEY_RIGHT:
-      return JOYPAD_RIGHT;
-    case KEY_LEFT:
-      return JOYPAD_LEFT;
-    case KEY_DOWN:
-      return JOYPAD_DOWN;
-    case KEY_UP:
-      return JOYPAD_UP;
-    case KEY_S:
-      return JOYPAD_START; // Start
-    case KEY_A:
-      return JOYPAD_SELECT; // Select
-    case KEY_Z:
-      return JOYPAD_B; // B
-    case KEY_X:
-      return JOYPAD_A; // A
-    case KEY_R:
-      return JOYPAD_A | JOYPAD_B | JOYPAD_SELECT | JOYPAD_START; // Game soft reset
-    default:
-      return 0;
+  uint8_t state = 0;
+
+  /* Yes this is not a typo. Reset button will only press */
+  if (g_key_binding.reset_combo != 0 && key == g_key_binding.reset_combo) {
+    state = JOYPAD_A | JOYPAD_B | JOYPAD_SELECT | JOYPAD_START;
+    return state;
   }
+
+  if (g_key_binding.a != 0 && key == g_key_binding.a) {
+    state |= JOYPAD_A;
+  }
+  if (g_key_binding.b != 0 && key == g_key_binding.b) {
+    state |= JOYPAD_B;
+  }
+  if (g_key_binding.select != 0 && key == g_key_binding.select) {
+    state |= JOYPAD_SELECT;
+  }
+  if (g_key_binding.start != 0 && key == g_key_binding.start) {
+    state |= JOYPAD_START;
+  }
+  if (g_key_binding.up != 0 && key == g_key_binding.up) {
+    state |= JOYPAD_UP;
+  }
+  if (g_key_binding.down != 0 && key == g_key_binding.down) {
+    state |= JOYPAD_DOWN;
+  }
+  if (g_key_binding.left != 0 && key == g_key_binding.left) {
+    state |= JOYPAD_LEFT;
+  }
+  if (g_key_binding.right != 0 && key == g_key_binding.right) {
+    state |= JOYPAD_RIGHT;
+  }
+
+  return state;
 }
 
 void lcd_draw_line_safe(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
@@ -956,27 +984,44 @@ static void loop(struct gb_s * const gb) {
   }
 }
 
+static void _load_config(struct priv_s *priv) {
+  priv->config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, CONFIG_PATH);
+  priv->config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, CONFIG_PATH);
+  priv->config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, CONFIG_PATH);
+  priv->config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, CONFIG_PATH);
+  priv->config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, CONFIG_PATH) & 0xffff;
+  priv->config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, CONFIG_PATH) & 0xffff;
+  priv->config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, CONFIG_PATH);
+  priv->config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, CONFIG_PATH);
+  priv->config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, CONFIG_PATH);
+
+  /* Filter out illegal values that may cause bad behavior. */
+  if (priv->config.button_hold_compensation_num == 0) {
+    priv->config.button_hold_compensation_num = 1;
+  }
+  if (priv->config.button_hold_compensation_denom == 0) {
+    priv->config.button_hold_compensation_denom = 1;
+  }
+}
+
+static void _load_key_binding() {
+  g_key_binding.a = _GetPrivateProfileInt("KeyBinding", "A", KEY_X, CONFIG_PATH);
+  g_key_binding.b = _GetPrivateProfileInt("KeyBinding", "B", KEY_Z, CONFIG_PATH);
+  g_key_binding.select = _GetPrivateProfileInt("KeyBinding", "Select", KEY_A, CONFIG_PATH);
+  g_key_binding.start = _GetPrivateProfileInt("KeyBinding", "Start", KEY_S, CONFIG_PATH);
+  g_key_binding.right = _GetPrivateProfileInt("KeyBinding", "Right", KEY_RIGHT, CONFIG_PATH);
+  g_key_binding.left = _GetPrivateProfileInt("KeyBinding", "Left", KEY_LEFT, CONFIG_PATH);
+  g_key_binding.up = _GetPrivateProfileInt("KeyBinding", "Up", KEY_UP, CONFIG_PATH);
+  g_key_binding.down = _GetPrivateProfileInt("KeyBinding", "Down", KEY_DOWN, CONFIG_PATH);
+  g_key_binding.reset_combo = _GetPrivateProfileInt("KeyBinding", "ResetCombo", KEY_R, CONFIG_PATH);
+}
+
 int main(void) {
   static struct gb_s gb;
   static struct priv_s priv = {0};
 
-  priv.config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, CONFIG_PATH);
-  priv.config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, CONFIG_PATH);
-  priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, CONFIG_PATH);
-  priv.config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, CONFIG_PATH);
-  priv.config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, CONFIG_PATH) & 0xffff;
-  priv.config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, CONFIG_PATH) & 0xffff;
-  priv.config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, CONFIG_PATH);
-  priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, CONFIG_PATH);
-  priv.config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, CONFIG_PATH);
-
-  /* Filter out illegal values that may cause bad behavior. */
-  if (priv.config.button_hold_compensation_num == 0) {
-    priv.config.button_hold_compensation_num = 1;
-  }
-  if (priv.config.button_hold_compensation_denom == 0) {
-    priv.config.button_hold_compensation_denom = 1;
-  }
+  _load_config(&priv);
+  _load_key_binding();
 
   int file_picker_result = rom_file_picker(&priv);
   if (file_picker_result > 0) {
@@ -993,6 +1038,14 @@ int main(void) {
   rgbSetBkColor(lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 ? 0xffffff : 0x000000);
   SetFontType(MONOSPACE_CJK);
   ClearScreen(false);
+  WriteAlignString(
+    lcd->surface->width / 2,
+    lcd->surface->height / 2 - GetFontHeight(MONOSPACE_CJK),
+    _BUL("Loading..."),
+    lcd->surface->width,
+    STR_ALIGN_CENTER,
+    PRINT_NONE
+  );
 
   priv.rom = _read_file(priv.rom_file_name, 0, false);
   if (priv.rom == NULL) {

@@ -92,6 +92,19 @@ ShowDelayFactor = 0
 ; Use the safe fallback framebuffer setup regardless of availability of faster
 ; alternatives (slow).
 ForceSafeFramebuffer = 0
+
+[KeyBinding]
+; Key binding settings in the foramt of <gb-key> = <besta-key-code>. Uncomment
+; to override the default bindings, and set to 0 to disable a key.
+;A = 88  ; KEY_X
+;B = 90  ; KEY_Z
+;Select = 65  ; KEY_A
+;Start = 83  ; KEY_S
+;Right = 4  ; KEY_RIGHT
+;Left = 2  ; KEY_LEFT
+;Up = 3  ; KEY_UP
+;Down = 5  ; KEY_DOWN
+;ResetCombo = 82  ; KEY_R
 ```
 
 ## Known board-specific quirks
