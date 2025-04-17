@@ -164,13 +164,13 @@ struct priv_s {
   /* Blit offset and limit. In fallback blit mode, these are passed to _BitBlt. In fast mode, these are used
      directly by the fast blit routine. */
   int rotation;
-  unsigned short x;
-  unsigned short y;
+  unsigned short canvas_x;
+  unsigned short canvas_y;
   unsigned short yskip;
   unsigned short width;
   unsigned short height;
   /* This needs to be the longer side of the width and height for it to support rotation. */
-  size_t yoff[LCD_WIDTH];
+  size_t surface_yoff[LCD_WIDTH];
 
   /* Backup of key press event parameters. */
   key_press_event_config_t old_hold_cfg;
@@ -450,27 +450,41 @@ static void _sound_off(struct gb_s *gb) {
 static void _set_blit_parameter(struct gb_s *gb, const lcd_surface_t * const surface) {
   struct priv_s *priv = gb->direct.priv;
 
+  const bool rotate = (
+    priv->rotation == ROTATION_TOP_SIDE_FACING_LEFT ||
+    priv->rotation == ROTATION_TOP_SIDE_FACING_RIGHT
+  );
+
   if (surface == NULL) {
-    priv->x = 0;
-    priv->y = 0;
+    priv->canvas_x = 0;
+    priv->canvas_y = 0;
     priv->width = LCD_WIDTH;
     priv->height = LCD_HEIGHT;
     return;
   }
 
-  int xoff = (surface->width - LCD_WIDTH) / 2, yoff = (surface->height - LCD_HEIGHT) / 2;
-  if (xoff <= 0) {
-    priv->x = 0;
-    priv->width = surface->width;
+  short ww, hh;
+  if (!rotate) {
+    ww = surface->width;
+    hh = surface->height;
   } else {
-    priv->x = xoff;
+    ww = surface->height;
+    hh = surface->width;
+  }
+
+  int xoff = (ww - LCD_WIDTH) / 2, yoff = (hh - LCD_HEIGHT) / 2;
+  if (xoff <= 0) {
+    priv->canvas_x = 0;
+    priv->width = ww;
+  } else {
+    priv->canvas_x = xoff;
     priv->width = LCD_WIDTH;
   }
   if (yoff <= 0) {
-    priv->y = 0;
-    priv->height = surface->height;
+    priv->canvas_y = 0;
+    priv->height = hh;
   } else {
-    priv->y = yoff;
+    priv->canvas_y = yoff;
     priv->height = LCD_HEIGHT;
   }
 }
@@ -479,22 +493,38 @@ static void _precompute_yoff(struct gb_s *gb) {
   struct priv_s *priv = gb->direct.priv;
   bool use_intermediate_fb = priv->fallback_blit;
 
-  unsigned short x = use_intermediate_fb ? 0 : priv->x;
-  unsigned short y = use_intermediate_fb ? 0 : priv->y;
+  unsigned short x = use_intermediate_fb ? 0 : priv->canvas_x;
+  unsigned short y = use_intermediate_fb ? 0 : priv->canvas_y;
 
-  size_t xoff = x;
+  if (priv->rotation == ROTATION_TOP_SIDE_FACING_LEFT || priv->rotation == ROTATION_TOP_SIDE_FACING_RIGHT) {
+    size_t surface_xoff = y;
 
-  switch (priv->fb->depth) {
-  case LCD_SURFACE_PIXFMT_L4:
-    xoff = x / 2;
-    break;
-  case LCD_SURFACE_PIXFMT_XRGB:
-    xoff = x * 4;
-    break;
-  }
+    switch (priv->fb->depth) {
+    case LCD_SURFACE_PIXFMT_L4:
+      surface_xoff = y / 2;
+      break;
+    case LCD_SURFACE_PIXFMT_XRGB:
+      surface_xoff = y * 4;
+      break;
+    }
+    for (size_t i = 0; i < LCD_WIDTH; i++) {
+      priv->surface_yoff[i] = (x + i) * priv->fb->xsize + surface_xoff;
+    }
+  } else {
+    size_t surface_xoff = x;
 
-  for (size_t i = 0; i < LCD_HEIGHT; i++) {
-    priv->yoff[i] = (y + i) * priv->fb->xsize + xoff;
+    switch (priv->fb->depth) {
+    case LCD_SURFACE_PIXFMT_L4:
+      surface_xoff = x / 2;
+      break;
+    case LCD_SURFACE_PIXFMT_XRGB:
+      surface_xoff = x * 4;
+      break;
+    }
+
+    for (size_t i = 0; i < LCD_HEIGHT; i++) {
+      priv->surface_yoff[i] = (y + i) * priv->fb->xsize + surface_xoff;
+    }
   }
 }
 
@@ -610,7 +640,7 @@ void lcd_draw_line_safe(struct gb_s *gb, const uint8_t pixels[160], const uint_f
   lcd_surface_t *fb = priv->fb;
 
   for (size_t x = 0; x < LCD_WIDTH; x += 2) {
-    ((uint8_t *) fb->buffer)[priv->yoff[line] + x / 2] = (
+    ((uint8_t *) fb->buffer)[priv->surface_yoff[line] + x / 2] = (
       ((COLOR_MAP[pixels[x] & 3] & 0xf) << 4) |
       (COLOR_MAP[pixels[x + 1] & 3] & 0xf)
     );
@@ -650,7 +680,7 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
 #endif
   }
 
-  _BitBlt(priv->real_fb, priv->x & 0xfffe, priv->y + line - priv->yskip, LCD_WIDTH, 1, priv->fb, 0, 0, BLIT_NONE);
+  _BitBlt(priv->real_fb, priv->canvas_x & 0xfffe, priv->canvas_y + line - priv->yskip, LCD_WIDTH, 1, priv->fb, 0, 0, BLIT_NONE);
 }
 
 void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
@@ -665,7 +695,24 @@ void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const u
     if (x >= priv->width) {
       break;
     }
-    size_t pixel_offset = priv->yoff[line] + x * 4;
+
+    size_t pixel_offset;
+    switch (priv->rotation) {
+      case ROTATION_TOP_SIDE_FACING_UP:
+      default:
+        pixel_offset = priv->surface_yoff[line] + x * 4;
+        break;
+      case ROTATION_TOP_SIDE_FACING_LEFT:
+        pixel_offset = priv->surface_yoff[LCD_WIDTH - 1 - x] + line * 4;
+        break;
+      case ROTATION_TOP_SIDE_FACING_DOWN:
+        pixel_offset = priv->surface_yoff[LCD_HEIGHT - 1 - line] + (LCD_WIDTH - 1 - x) * 4;
+        break;
+      case ROTATION_TOP_SIDE_FACING_RIGHT:
+        pixel_offset = priv->surface_yoff[x] + (LCD_HEIGHT - 1 - line) * 4;
+        break;
+    }
+    
 
 #if PEANUT_FULL_GBC_SUPPORT
     if (gb->cgb.cgbMode) {
@@ -947,7 +994,7 @@ static void loop(struct gb_s * const gb) {
     }
 
     if (priv->fallback_blit && !priv->p4_1line_buffer) {
-      _BitBlt(priv->real_fb, priv->x, priv->y, priv->width, priv->height, priv->fb, 0, 0, BLIT_NONE);
+      _BitBlt(priv->real_fb, priv->canvas_x, priv->canvas_y, priv->width, priv->height, priv->fb, 0, 0, BLIT_NONE);
     }
 
     if (emu_key_state_current & EMU_KEY_SRAM_COMMIT) {
