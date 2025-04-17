@@ -163,12 +163,14 @@ struct priv_s {
 
   /* Blit offset and limit. In fallback blit mode, these are passed to _BitBlt. In fast mode, these are used
      directly by the fast blit routine. */
+  int rotation;
   unsigned short x;
   unsigned short y;
   unsigned short yskip;
   unsigned short width;
   unsigned short height;
-  size_t yoff[LCD_HEIGHT];
+  /* This needs to be the longer side of the width and height for it to support rotation. */
+  size_t yoff[LCD_WIDTH];
 
   /* Backup of key press event parameters. */
   key_press_event_config_t old_hold_cfg;
@@ -1066,10 +1068,10 @@ int main(void) {
   SetFontType(MONOSPACE_CJK);
   ClearScreen(false);
   WriteAlignString(
-    lcd->surface->width / 2,
-    lcd->surface->height / 2 - GetFontHeight(MONOSPACE_CJK),
+    lcd->width / 2,
+    (lcd->height - GetFontHeight(MONOSPACE_CJK)) / 2,
     _BUL("Loading..."),
-    lcd->surface->width,
+    lcd->width,
     STR_ALIGN_CENTER,
     PRINT_NONE
   );
@@ -1123,6 +1125,7 @@ int main(void) {
 
   if (lcd->surface->depth == LCD_SURFACE_PIXFMT_XRGB && !priv.config.debug_force_safe_framebuffer) {
     priv.fb = lcd->surface;
+    priv.rotation = lcd->rotation;
     gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
   } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 && !priv.config.debug_force_safe_framebuffer) {
     /* 4-bit LCD machines don't have a hardware-backed framebuffer and
