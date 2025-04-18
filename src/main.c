@@ -70,6 +70,16 @@ struct key_binding_s {
   unsigned short up;
   unsigned short down;
   unsigned short reset_combo;
+
+  unsigned short quit;
+  unsigned short mute;
+  unsigned short reset_hard;
+  unsigned short scroll_up;
+  unsigned short scroll_down;
+  unsigned short scroll_top;
+  unsigned short scroll_center;
+  unsigned short scroll_bottom;
+  unsigned short sram_commit;
 };
 
 static int _audio_worker(void *user_data);
@@ -450,7 +460,7 @@ static void _sound_off(struct gb_s *gb) {
 static void _set_blit_parameter(struct gb_s *gb, const lcd_surface_t * const surface) {
   struct priv_s *priv = gb->direct.priv;
 
-  const bool rotate = (
+  const bool rotate = (!priv->fallback_blit) && (
     priv->rotation == ROTATION_TOP_SIDE_FACING_LEFT ||
     priv->rotation == ROTATION_TOP_SIDE_FACING_RIGHT
   );
@@ -496,7 +506,10 @@ static void _precompute_yoff(struct gb_s *gb) {
   unsigned short x = use_intermediate_fb ? 0 : priv->canvas_x;
   unsigned short y = use_intermediate_fb ? 0 : priv->canvas_y;
 
-  if (priv->rotation == ROTATION_TOP_SIDE_FACING_LEFT || priv->rotation == ROTATION_TOP_SIDE_FACING_RIGHT) {
+  if (
+      (!use_intermediate_fb) &&
+      (priv->rotation == ROTATION_TOP_SIDE_FACING_LEFT || priv->rotation == ROTATION_TOP_SIDE_FACING_RIGHT)
+  ) {
     size_t surface_xoff = y;
 
     switch (priv->fb->depth) {
@@ -573,64 +586,44 @@ static void _write_save(struct gb_s *gb, const char *path) {
   fclose(f);
 }
 
-static unsigned int _map_emu_key_state(unsigned short key) {
-  switch (key) {
-    case KEY_ESC:
-      return EMU_KEY_QUIT;
-    case KEY_M:
-      return EMU_KEY_MUTE;
-    case KEY_H:
-      return EMU_KEY_RESET;
-    case KEY_PGUP:
-      return EMU_KEY_SCROLL_UP;
-    case KEY_PGDN:
-      return EMU_KEY_SCROLL_DOWN;
-    case KEY_1:
-      return EMU_KEY_SCROLL_TOP;
-    case KEY_2:
-      return EMU_KEY_SCROLL_CENTER;
-    case KEY_3:
-      return EMU_KEY_SCROLL_BOTTOM;
-    case KEY_SAVE:
-      return EMU_KEY_SRAM_COMMIT;
-    default:
-      return 0;
+#define _TEST_KEY(map, state, as) \
+  if (map != 0 && key == map) { \
+    state |= as; \
   }
+
+static unsigned int _map_emu_key_state(unsigned short key) {
+  unsigned int state = 0;
+
+  _TEST_KEY(g_key_binding.quit, state, EMU_KEY_QUIT)
+  _TEST_KEY(g_key_binding.mute, state, EMU_KEY_MUTE)
+  _TEST_KEY(g_key_binding.reset_hard, state, EMU_KEY_RESET)
+  _TEST_KEY(g_key_binding.scroll_up, state, EMU_KEY_SCROLL_UP)
+  _TEST_KEY(g_key_binding.scroll_down, state, EMU_KEY_SCROLL_DOWN)
+  _TEST_KEY(g_key_binding.scroll_top, state, EMU_KEY_SCROLL_TOP)
+  _TEST_KEY(g_key_binding.scroll_center, state, EMU_KEY_SCROLL_CENTER)
+  _TEST_KEY(g_key_binding.scroll_bottom, state, EMU_KEY_SCROLL_BOTTOM)
+  _TEST_KEY(g_key_binding.sram_commit, state, EMU_KEY_SRAM_COMMIT)
+
+  return state;
 }
 
 static uint8_t _map_pad_state(unsigned short key) {
   uint8_t state = 0;
 
-  /* Yes this is not a typo. Reset button will only press */
+  /* If reset button is pressed, press down A B Select Start and short circuit. */
   if (g_key_binding.reset_combo != 0 && key == g_key_binding.reset_combo) {
     state = JOYPAD_A | JOYPAD_B | JOYPAD_SELECT | JOYPAD_START;
     return state;
   }
 
-  if (g_key_binding.a != 0 && key == g_key_binding.a) {
-    state |= JOYPAD_A;
-  }
-  if (g_key_binding.b != 0 && key == g_key_binding.b) {
-    state |= JOYPAD_B;
-  }
-  if (g_key_binding.select != 0 && key == g_key_binding.select) {
-    state |= JOYPAD_SELECT;
-  }
-  if (g_key_binding.start != 0 && key == g_key_binding.start) {
-    state |= JOYPAD_START;
-  }
-  if (g_key_binding.up != 0 && key == g_key_binding.up) {
-    state |= JOYPAD_UP;
-  }
-  if (g_key_binding.down != 0 && key == g_key_binding.down) {
-    state |= JOYPAD_DOWN;
-  }
-  if (g_key_binding.left != 0 && key == g_key_binding.left) {
-    state |= JOYPAD_LEFT;
-  }
-  if (g_key_binding.right != 0 && key == g_key_binding.right) {
-    state |= JOYPAD_RIGHT;
-  }
+  _TEST_KEY(g_key_binding.a, state, JOYPAD_A)
+  _TEST_KEY(g_key_binding.b, state, JOYPAD_B)
+  _TEST_KEY(g_key_binding.select, state, JOYPAD_SELECT)
+  _TEST_KEY(g_key_binding.start, state, JOYPAD_START)
+  _TEST_KEY(g_key_binding.up, state, JOYPAD_UP)
+  _TEST_KEY(g_key_binding.down, state, JOYPAD_DOWN)
+  _TEST_KEY(g_key_binding.left, state, JOYPAD_LEFT)
+  _TEST_KEY(g_key_binding.right, state, JOYPAD_RIGHT)
 
   return state;
 }
@@ -684,6 +677,41 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
 }
 
 void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
+  const struct priv_s * const priv = gb->direct.priv;
+  lcd_surface_t *fb = priv->fb;
+
+  if (line >= priv->height) {
+    return;
+  }
+
+  for (size_t x = 0; x < LCD_WIDTH; x++) {
+    if (x >= priv->width) {
+      break;
+    }
+
+    size_t pixel_offset = priv->surface_yoff[line] + x * 4;
+
+#if PEANUT_FULL_GBC_SUPPORT
+    if (gb->cgb.cgbMode) {
+      uint16_t pixel = gb->cgb.fixPalette[pixels[x]];
+      ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP_CGB[pixel & 0x001f];
+      ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP_CGB[(pixel & 0x03e0) >> 5];
+      ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP_CGB[(pixel & 0x7c00) >> 10];
+      ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+    } else {
+#endif
+      /* TODO palette */
+      ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP[pixels[x] & 3];
+      ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP[pixels[x] & 3];
+      ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP[pixels[x] & 3];
+      ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+#if PEANUT_FULL_GBC_SUPPORT
+    }
+#endif
+  }
+}
+
+void lcd_draw_line_fast_xrgb_rot(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
   const struct priv_s * const priv = gb->direct.priv;
   lcd_surface_t *fb = priv->fb;
 
@@ -1090,6 +1118,16 @@ static void _load_key_binding() {
   g_key_binding.up = _GetPrivateProfileInt("KeyBinding", "Up", KEY_UP, CONFIG_PATH);
   g_key_binding.down = _GetPrivateProfileInt("KeyBinding", "Down", KEY_DOWN, CONFIG_PATH);
   g_key_binding.reset_combo = _GetPrivateProfileInt("KeyBinding", "ResetCombo", KEY_R, CONFIG_PATH);
+
+  g_key_binding.quit = _GetPrivateProfileInt("KeyBinding", "Quit", KEY_ESC, CONFIG_PATH);
+  g_key_binding.mute = _GetPrivateProfileInt("KeyBinding", "Mute", KEY_M, CONFIG_PATH);
+  g_key_binding.reset_hard = _GetPrivateProfileInt("KeyBinding", "ResetHard", KEY_H, CONFIG_PATH);
+  g_key_binding.scroll_up = _GetPrivateProfileInt("KeyBinding", "ScrollUp", KEY_PGUP, CONFIG_PATH);
+  g_key_binding.scroll_down = _GetPrivateProfileInt("KeyBinding", "ScrollDown", KEY_PGDN, CONFIG_PATH);
+  g_key_binding.scroll_top = _GetPrivateProfileInt("KeyBinding", "ScrollTop", KEY_1, CONFIG_PATH);
+  g_key_binding.scroll_center = _GetPrivateProfileInt("KeyBinding", "ScrollCenter", KEY_2, CONFIG_PATH);
+  g_key_binding.scroll_bottom = _GetPrivateProfileInt("KeyBinding", "ScrollBottom", KEY_3, CONFIG_PATH);
+  g_key_binding.sram_commit = _GetPrivateProfileInt("KeyBinding", "SRAMCommit", KEY_SAVE, CONFIG_PATH);
 }
 
 int main(void) {
@@ -1173,7 +1211,12 @@ int main(void) {
   if (lcd->surface->depth == LCD_SURFACE_PIXFMT_XRGB && !priv.config.debug_force_safe_framebuffer) {
     priv.fb = lcd->surface;
     priv.rotation = lcd->rotation;
-    gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
+    /* Only use the rotation-aware blit when absolutely needed. Saves about 1-2ms on BA802. */
+    if (lcd->rotation != ROTATION_TOP_SIDE_FACING_UP) {
+      gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb_rot);
+    } else {
+      gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
+    }
   } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 && !priv.config.debug_force_safe_framebuffer) {
     /* 4-bit LCD machines don't have a hardware-backed framebuffer and
      * we need to blit a 160x1 buffer to the screen line-by-line. */

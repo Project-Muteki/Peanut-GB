@@ -110,6 +110,16 @@ ForceSafeFramebuffer = 0
 ;Up = 3  ; KEY_UP
 ;Down = 5  ; KEY_DOWN
 ;ResetCombo = 82  ; KEY_R
+
+;Quit = 1  ; KEY_ESC
+;Mute = 77  ; KEY_M
+;ResetHard = 72  ; KEY_H
+;ScrollUp = 6  ; KEY_PGUP
+;ScrollDown = 7  ; KEY_PGDN
+;ScrollTop = 49  ; KEY_1
+;ScrollCenter = 50  ; KEY_2
+;ScrollBottom = 51  ; KEY_3
+;SRAMCommit = 150  ; KEY_SAVE
 ```
 
 ## Known board-specific quirks
