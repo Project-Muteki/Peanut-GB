@@ -48,22 +48,6 @@ Interlace = 0
 ; Enable frame skip (half refresh rate) mode.
 HalfRefresh = 0
 
-; Select frame limiter type
-;
-; Type 0: Use the OS scheduler to time the frames.
-; This is achieved by spawning a high-priority thread that would increment a
-; counter on every scheduler tick. Useful on boards without a millisecond-level
-; accurate RTC (e.g. some S3C2416-based boards).
-;
-; Type 1: Use the RTC to time the frames. The millis field is used to determine
-; how long to put the main thread to sleep.
-;
-; Type 2: Use the RTC to time the frames, but treat the unit of millis as half
-; of a millisecond (a quirk on the S3C-based boards) and only do 1 tick sleep
-; in a loop while continually checking the millis value until the requested
-; amount of millisecond elapses.
-FrameLimiterType = 0
-
 ; Enable perioical SRAM auto-commit (recommended)
 ;
 ; Some boards have very slow I/O and auto-commit creates noticeable lag spikes
@@ -100,6 +84,11 @@ ButtonHoldCompensationDenom = 1
 ; - Mode 2: Reserved for HP Prime keypad protocol. Do not use.
 MultiPressMode = 0
 
+; Synchronize emulated RTC with the system RTC on emulator resume (i.e. waking
+; up from deep sleep and selecting No on quit confirmation dialog). May cause
+; issues with some games.
+SyncRTCOnResume = 0
+
 [Debug]
 ; Show the average number of milliseconds spent on delaying the main loop after
 ; each frame. Updated every 32 frames.
@@ -108,6 +97,29 @@ ShowDelayFactor = 0
 ; Use the safe fallback framebuffer setup regardless of availability of faster
 ; alternatives (slow).
 ForceSafeFramebuffer = 0
+
+[KeyBinding]
+; Key binding settings in the foramt of <gb-key> = <besta-key-code>. Uncomment
+; to override the default bindings, and set to 0 to disable a key.
+;A = 88  ; KEY_X
+;B = 90  ; KEY_Z
+;Select = 65  ; KEY_A
+;Start = 83  ; KEY_S
+;Right = 4  ; KEY_RIGHT
+;Left = 2  ; KEY_LEFT
+;Up = 3  ; KEY_UP
+;Down = 5  ; KEY_DOWN
+;ResetCombo = 82  ; KEY_R
+
+;Quit = 1  ; KEY_ESC
+;Mute = 77  ; KEY_M
+;ResetHard = 72  ; KEY_H
+;ScrollUp = 6  ; KEY_PGUP
+;ScrollDown = 7  ; KEY_PGDN
+;ScrollTop = 49  ; KEY_1
+;ScrollCenter = 50  ; KEY_2
+;ScrollBottom = 51  ; KEY_3
+;SRAMCommit = 150  ; KEY_SAVE
 ```
 
 ## Known board-specific quirks

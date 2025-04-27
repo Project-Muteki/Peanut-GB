@@ -13,12 +13,14 @@
 #include <muteki/utf16.h>
 #include <muteki/utils.h>
 #include <muteki/ui/canvas.h>
+#include <muteki/ui/font.h>
 #include <muteki/ui/event.h>
 #include <muteki/ui/surface.h>
 #include <muteki/ui/views/filepicker.h>
 #include <muteki/ui/views/messagebox.h>
 
 #include <mutekix/threading.h>
+#include <mutekix/time.h>
 
 #define ENABLE_SOUND 1
 
@@ -46,12 +48,6 @@ typedef enum {
   MULTI_PRESS_MODE_NATIVE_S3C,
 } multi_press_mode_t;
 
-typedef enum {
-  FRAME_LIMITER_SCHED = 0,
-  FRAME_LIMITER_RTC,
-  FRAME_LIMITER_RTC_DOUBLE,
-} frame_limiter_type_t;
-
 enum emu_key_e {
   EMU_KEY_QUIT = 1,
   EMU_KEY_MUTE = 1 << 1,
@@ -64,10 +60,31 @@ enum emu_key_e {
   EMU_KEY_SRAM_COMMIT = 1 << 8,
 };
 
+struct key_binding_s {
+  unsigned short a;
+  unsigned short b;
+  unsigned short select;
+  unsigned short start;
+  unsigned short right;
+  unsigned short left;
+  unsigned short up;
+  unsigned short down;
+  unsigned short reset_combo;
+
+  unsigned short quit;
+  unsigned short mute;
+  unsigned short reset_hard;
+  unsigned short scroll_up;
+  unsigned short scroll_down;
+  unsigned short scroll_top;
+  unsigned short scroll_center;
+  unsigned short scroll_bottom;
+  unsigned short sram_commit;
+};
+
 static int _audio_worker(void *user_data);
 static int _input_dis_worker(void *user_data);
 static int _input_s3c_worker(void *user_data);
-static int _sched_timer_worker(void *user_data);
 static unsigned int _map_emu_key_state(unsigned short key);
 static uint8_t _map_pad_state(unsigned short key);
 
@@ -83,11 +100,6 @@ static mutekix_thread_arg_t input_dis_worker_arg = {
 
 static mutekix_thread_arg_t input_s3c_worker_arg = {
   .func = &_input_s3c_worker,
-  .user_data = NULL,
-};
-
-static mutekix_thread_arg_t sched_timer_worker_arg = {
-  .func = &_sched_timer_worker,
   .user_data = NULL,
 };
 
@@ -121,6 +133,7 @@ const key_press_event_config_t KEY_EVENT_CONFIG_TURBO = {0, 0, 0};
 
 volatile unsigned int emu_key_state = 0, pad_key_state = 0;
 volatile bool holding_any_key = false;
+volatile bool power_event = false;
 volatile uint8_t audio_buffer_consumer_offset;
 volatile uint8_t audio_buffer_producer_offset;
 volatile bool audio_running = false;
@@ -133,15 +146,17 @@ thread_t *sched_timer_worker_inst = NULL;
 event_t *audio_shutdown_ack = NULL;
 event_t *input_poller_shutdown_ack = NULL;
 
+static struct key_binding_s g_key_binding = {0};
+
 struct priv_config_s {
   short button_hold_compensation_num;
   short button_hold_compensation_denom;
   multi_press_mode_t multi_press_mode;
-  frame_limiter_type_t frame_limiter_type;
   bool enable_audio;
   bool interlace;
   bool half_refresh;
   bool sram_auto_commit;
+  bool sync_rtc_on_resume;
   bool debug_show_delay_factor;
   bool debug_force_safe_framebuffer;
 };
@@ -158,12 +173,14 @@ struct priv_s {
 
   /* Blit offset and limit. In fallback blit mode, these are passed to _BitBlt. In fast mode, these are used
      directly by the fast blit routine. */
-  unsigned short x;
-  unsigned short y;
+  int rotation;
+  unsigned short canvas_x;
+  unsigned short canvas_y;
   unsigned short yskip;
   unsigned short width;
   unsigned short height;
-  size_t yoff[LCD_HEIGHT];
+  /* This needs to be the longer side of the width and height for it to support rotation. */
+  size_t surface_yoff[LCD_WIDTH];
 
   /* Backup of key press event parameters. */
   key_press_event_config_t old_hold_cfg;
@@ -199,8 +216,12 @@ static inline void _ext_ticker_s3c() {
      spamming so we know whether a single-shot was held-down? */
   while ((TestPendEvent(&uievent) || TestKeyEvent(&uievent)) && GetEvent(&uievent)) {
     if (uievent.event_type == UI_EVENT_TYPE_KEY) {
-      pad_key_state_local |= _map_pad_state(uievent.key_code0);
-      emu_key_state_local |= _map_emu_key_state(uievent.key_code0);
+      if (uievent.key_code0 == KEY_POWER) {
+        power_event = true;
+      } else {
+        pad_key_state_local |= _map_pad_state(uievent.key_code0);
+        emu_key_state_local |= _map_emu_key_state(uievent.key_code0);
+      }
     } else if (uievent.event_type == UI_EVENT_TYPE_KEY_UP) {
       pad_key_state_local &= ~_map_pad_state(uievent.key_code0);
       emu_key_state_local &= ~_map_emu_key_state(uievent.key_code0);
@@ -226,9 +247,15 @@ static inline void _ext_ticker_dis() {
     while (_test_events_no_shift(&uievent)) {
       hit = true;
       if (GetEvent(&uievent) && uievent.event_type == UI_EVENT_TYPE_KEY) {
-        pressing0 = uievent.key_code0;
-        pressing1 = uievent.key_code1;
-        down_counter = 7;
+        if (uievent.key_code0 == KEY_POWER || uievent.key_code1 == KEY_POWER) {
+          hit = false;
+          down_counter = 1;
+          power_event = true;
+        } else {
+          pressing0 = uievent.key_code0;
+          pressing1 = uievent.key_code1;
+          down_counter = 7;
+        }
       } else {
         ClearEvent(&uievent);
       }
@@ -334,18 +361,6 @@ static int _input_s3c_worker(void *user_data) {
   return 0;
 }
 
-static int _sched_timer_worker(void *user_data) {
-  (void) user_data;
-  while (true) {
-    sched_timer_ticks++;
-    if (sched_timer_ticks >= 1000) {
-      sched_timer_ticks = 0;
-    }
-    OSSleep(1);
-  }
-  return 0;
-}
-
 static inline void _drain_all_events() {
   ui_event_t uievent = {0};
   size_t silence_count = 0;
@@ -442,43 +457,44 @@ static void _sound_off(struct gb_s *gb) {
   }
 }
 
-static void _sched_timer_start() {
-  if (sched_timer_worker_inst == NULL) {
-    sched_timer_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &sched_timer_worker_arg, 4096, false);
-  }
-}
-
-static void _sched_timer_stop() {
-  if (sched_timer_worker_inst != NULL) {
-    OSTerminateThread(sched_timer_worker_inst, 0);
-    sched_timer_worker_inst = NULL;
-  }
-}
-
 static void _set_blit_parameter(struct gb_s *gb, const lcd_surface_t * const surface) {
   struct priv_s *priv = gb->direct.priv;
 
+  const bool rotate = (!priv->fallback_blit) && (
+    priv->rotation == ROTATION_TOP_SIDE_FACING_LEFT ||
+    priv->rotation == ROTATION_TOP_SIDE_FACING_RIGHT
+  );
+
   if (surface == NULL) {
-    priv->x = 0;
-    priv->y = 0;
+    priv->canvas_x = 0;
+    priv->canvas_y = 0;
     priv->width = LCD_WIDTH;
     priv->height = LCD_HEIGHT;
     return;
   }
 
-  int xoff = (surface->width - LCD_WIDTH) / 2, yoff = (surface->height - LCD_HEIGHT) / 2;
-  if (xoff <= 0) {
-    priv->x = 0;
-    priv->width = surface->width;
+  short ww, hh;
+  if (!rotate) {
+    ww = surface->width;
+    hh = surface->height;
   } else {
-    priv->x = xoff;
+    ww = surface->height;
+    hh = surface->width;
+  }
+
+  int xoff = (ww - LCD_WIDTH) / 2, yoff = (hh - LCD_HEIGHT) / 2;
+  if (xoff <= 0) {
+    priv->canvas_x = 0;
+    priv->width = ww;
+  } else {
+    priv->canvas_x = xoff;
     priv->width = LCD_WIDTH;
   }
   if (yoff <= 0) {
-    priv->y = 0;
-    priv->height = surface->height;
+    priv->canvas_y = 0;
+    priv->height = hh;
   } else {
-    priv->y = yoff;
+    priv->canvas_y = yoff;
     priv->height = LCD_HEIGHT;
   }
 }
@@ -487,22 +503,41 @@ static void _precompute_yoff(struct gb_s *gb) {
   struct priv_s *priv = gb->direct.priv;
   bool use_intermediate_fb = priv->fallback_blit;
 
-  unsigned short x = use_intermediate_fb ? 0 : priv->x;
-  unsigned short y = use_intermediate_fb ? 0 : priv->y;
+  unsigned short x = use_intermediate_fb ? 0 : priv->canvas_x;
+  unsigned short y = use_intermediate_fb ? 0 : priv->canvas_y;
 
-  size_t xoff = x;
+  if (
+      (!use_intermediate_fb) &&
+      (priv->rotation == ROTATION_TOP_SIDE_FACING_LEFT || priv->rotation == ROTATION_TOP_SIDE_FACING_RIGHT)
+  ) {
+    size_t surface_xoff = y;
 
-  switch (priv->fb->depth) {
-  case LCD_SURFACE_PIXFMT_L4:
-    xoff = x / 2;
-    break;
-  case LCD_SURFACE_PIXFMT_XRGB:
-    xoff = x * 4;
-    break;
-  }
+    switch (priv->fb->depth) {
+    case LCD_SURFACE_PIXFMT_L4:
+      surface_xoff = y / 2;
+      break;
+    case LCD_SURFACE_PIXFMT_XRGB:
+      surface_xoff = y * 4;
+      break;
+    }
+    for (size_t i = 0; i < LCD_WIDTH; i++) {
+      priv->surface_yoff[i] = (x + i) * priv->fb->xsize + surface_xoff;
+    }
+  } else {
+    size_t surface_xoff = x;
 
-  for (size_t i = 0; i < LCD_HEIGHT; i++) {
-    priv->yoff[i] = (y + i) * priv->fb->xsize + xoff;
+    switch (priv->fb->depth) {
+    case LCD_SURFACE_PIXFMT_L4:
+      surface_xoff = x / 2;
+      break;
+    case LCD_SURFACE_PIXFMT_XRGB:
+      surface_xoff = x * 4;
+      break;
+    }
+
+    for (size_t i = 0; i < LCD_HEIGHT; i++) {
+      priv->surface_yoff[i] = (y + i) * priv->fb->xsize + surface_xoff;
+    }
   }
 }
 
@@ -551,54 +586,46 @@ static void _write_save(struct gb_s *gb, const char *path) {
   fclose(f);
 }
 
-static unsigned int _map_emu_key_state(unsigned short key) {
-  switch (key) {
-    case KEY_ESC:
-      return EMU_KEY_QUIT;
-    case KEY_M:
-      return EMU_KEY_MUTE;
-    case KEY_H:
-      return EMU_KEY_RESET;
-    case KEY_PGUP:
-      return EMU_KEY_SCROLL_UP;
-    case KEY_PGDN:
-      return EMU_KEY_SCROLL_DOWN;
-    case KEY_1:
-      return EMU_KEY_SCROLL_TOP;
-    case KEY_2:
-      return EMU_KEY_SCROLL_CENTER;
-    case KEY_3:
-      return EMU_KEY_SCROLL_BOTTOM;
-    case KEY_SAVE:
-      return EMU_KEY_SRAM_COMMIT;
-    default:
-      return 0;
+#define _TEST_KEY(map, state, as) \
+  if (map != 0 && key == map) { \
+    state |= as; \
   }
+
+static unsigned int _map_emu_key_state(unsigned short key) {
+  unsigned int state = 0;
+
+  _TEST_KEY(g_key_binding.quit, state, EMU_KEY_QUIT)
+  _TEST_KEY(g_key_binding.mute, state, EMU_KEY_MUTE)
+  _TEST_KEY(g_key_binding.reset_hard, state, EMU_KEY_RESET)
+  _TEST_KEY(g_key_binding.scroll_up, state, EMU_KEY_SCROLL_UP)
+  _TEST_KEY(g_key_binding.scroll_down, state, EMU_KEY_SCROLL_DOWN)
+  _TEST_KEY(g_key_binding.scroll_top, state, EMU_KEY_SCROLL_TOP)
+  _TEST_KEY(g_key_binding.scroll_center, state, EMU_KEY_SCROLL_CENTER)
+  _TEST_KEY(g_key_binding.scroll_bottom, state, EMU_KEY_SCROLL_BOTTOM)
+  _TEST_KEY(g_key_binding.sram_commit, state, EMU_KEY_SRAM_COMMIT)
+
+  return state;
 }
 
 static uint8_t _map_pad_state(unsigned short key) {
-  switch (key) {
-    case KEY_RIGHT:
-      return JOYPAD_RIGHT;
-    case KEY_LEFT:
-      return JOYPAD_LEFT;
-    case KEY_DOWN:
-      return JOYPAD_DOWN;
-    case KEY_UP:
-      return JOYPAD_UP;
-    case KEY_S:
-      return JOYPAD_START; // Start
-    case KEY_A:
-      return JOYPAD_SELECT; // Select
-    case KEY_Z:
-      return JOYPAD_B; // B
-    case KEY_X:
-      return JOYPAD_A; // A
-    case KEY_R:
-      return JOYPAD_A | JOYPAD_B | JOYPAD_SELECT | JOYPAD_START; // Game soft reset
-    default:
-      return 0;
+  uint8_t state = 0;
+
+  /* If reset button is pressed, press down A B Select Start and short circuit. */
+  if (g_key_binding.reset_combo != 0 && key == g_key_binding.reset_combo) {
+    state = JOYPAD_A | JOYPAD_B | JOYPAD_SELECT | JOYPAD_START;
+    return state;
   }
+
+  _TEST_KEY(g_key_binding.a, state, JOYPAD_A)
+  _TEST_KEY(g_key_binding.b, state, JOYPAD_B)
+  _TEST_KEY(g_key_binding.select, state, JOYPAD_SELECT)
+  _TEST_KEY(g_key_binding.start, state, JOYPAD_START)
+  _TEST_KEY(g_key_binding.up, state, JOYPAD_UP)
+  _TEST_KEY(g_key_binding.down, state, JOYPAD_DOWN)
+  _TEST_KEY(g_key_binding.left, state, JOYPAD_LEFT)
+  _TEST_KEY(g_key_binding.right, state, JOYPAD_RIGHT)
+
+  return state;
 }
 
 void lcd_draw_line_safe(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
@@ -606,7 +633,7 @@ void lcd_draw_line_safe(struct gb_s *gb, const uint8_t pixels[160], const uint_f
   lcd_surface_t *fb = priv->fb;
 
   for (size_t x = 0; x < LCD_WIDTH; x += 2) {
-    ((uint8_t *) fb->buffer)[priv->yoff[line] + x / 2] = (
+    ((uint8_t *) fb->buffer)[priv->surface_yoff[line] + x / 2] = (
       ((COLOR_MAP[pixels[x] & 3] & 0xf) << 4) |
       (COLOR_MAP[pixels[x + 1] & 3] & 0xf)
     );
@@ -646,7 +673,7 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
 #endif
   }
 
-  _BitBlt(priv->real_fb, priv->x & 0xfffe, priv->y + line - priv->yskip, LCD_WIDTH, 1, priv->fb, 0, 0, BLIT_NONE);
+  _BitBlt(priv->real_fb, priv->canvas_x & 0xfffe, priv->canvas_y + line - priv->yskip, LCD_WIDTH, 1, priv->fb, 0, 0, BLIT_NONE);
 }
 
 void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
@@ -661,7 +688,59 @@ void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const u
     if (x >= priv->width) {
       break;
     }
-    size_t pixel_offset = priv->yoff[line] + x * 4;
+
+    size_t pixel_offset = priv->surface_yoff[line] + x * 4;
+
+#if PEANUT_FULL_GBC_SUPPORT
+    if (gb->cgb.cgbMode) {
+      uint16_t pixel = gb->cgb.fixPalette[pixels[x]];
+      ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP_CGB[pixel & 0x001f];
+      ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP_CGB[(pixel & 0x03e0) >> 5];
+      ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP_CGB[(pixel & 0x7c00) >> 10];
+      ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+    } else {
+#endif
+      /* TODO palette */
+      ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP[pixels[x] & 3];
+      ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP[pixels[x] & 3];
+      ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP[pixels[x] & 3];
+      ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+#if PEANUT_FULL_GBC_SUPPORT
+    }
+#endif
+  }
+}
+
+void lcd_draw_line_fast_xrgb_rot(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
+  const struct priv_s * const priv = gb->direct.priv;
+  lcd_surface_t *fb = priv->fb;
+
+  if (line >= priv->height) {
+    return;
+  }
+
+  for (size_t x = 0; x < LCD_WIDTH; x++) {
+    if (x >= priv->width) {
+      break;
+    }
+
+    size_t pixel_offset;
+    switch (priv->rotation) {
+      case ROTATION_TOP_SIDE_FACING_UP:
+      default:
+        pixel_offset = priv->surface_yoff[line] + x * 4;
+        break;
+      case ROTATION_TOP_SIDE_FACING_LEFT:
+        pixel_offset = priv->surface_yoff[LCD_WIDTH - 1 - x] + line * 4;
+        break;
+      case ROTATION_TOP_SIDE_FACING_DOWN:
+        pixel_offset = priv->surface_yoff[LCD_HEIGHT - 1 - line] + (LCD_WIDTH - 1 - x) * 4;
+        break;
+      case ROTATION_TOP_SIDE_FACING_RIGHT:
+        pixel_offset = priv->surface_yoff[x] + (LCD_HEIGHT - 1 - line) * 4;
+        break;
+    }
+    
 
 #if PEANUT_FULL_GBC_SUPPORT
     if (gb->cgb.cgbMode) {
@@ -718,7 +797,7 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
   _write_save(gb, "recovery.sav");
 
   /* Stop workers (if they are running). */
-  _sched_timer_stop();
+  mutekix_time_fini();
   _sound_off(gb);
 
   if(addr >= 0x4000 && addr < 0x8000)
@@ -831,7 +910,7 @@ static inline void sleep_with_double_rtc(unsigned short ms) {
     GetSysTime(&dt);
     int ticks_elapsed = ((dt.millis < start) ? (1000 + dt.millis - start) : (dt.millis - start));
     // fudge
-    if (ticks_elapsed >= (ms - 1) * 2) {
+    if (ticks_elapsed >= ms * 2 - 3) {
       return;
     }
   }
@@ -839,8 +918,7 @@ static inline void sleep_with_double_rtc(unsigned short ms) {
 
 static void loop(struct gb_s * const gb) {
   struct priv_s * const priv = gb->direct.priv;
-  datetime_t dt;
-  int last_millis = 0, current_millis = 0;
+  unsigned long long current_time = 0, last_time = 0, power_event_start = 0;
   short frame_advance_cnt = 0;
   short auto_save_counter = 0;
 #if MANUAL_RTC_NEEDED
@@ -850,19 +928,25 @@ static void loop(struct gb_s * const gb) {
   short delay_factor_counter = 0;
   int delay_millis_sum = 0;
 
-  frame_limiter_type_t frame_limiter_type = priv->config.frame_limiter_type;
   bool debug_show_delay_factor = priv->config.debug_show_delay_factor;
   bool sram_auto_commit = priv->config.sram_auto_commit;
   short button_hold_compensation_num = priv->config.button_hold_compensation_num;
   short button_hold_compensation_denom = priv->config.button_hold_compensation_denom;
 
   while (true) {
-    if (frame_limiter_type == FRAME_LIMITER_SCHED) {
-      last_millis = sched_timer_ticks;
-    } else {
-      GetSysTime(&dt);
-      last_millis = dt.millis;
+    /* Power event handling. */
+    if (power_event) {
+      power_event_start = mutekix_time_get_usecs();
+      power_event = false;
     }
+    if (power_event_start != 0 && mutekix_time_get_usecs() - power_event_start >= 500000ull) {
+      if (priv->config.sync_rtc_on_resume) {
+        _set_rtc(gb);
+      }
+      power_event_start = 0;
+    }
+
+    last_time = mutekix_time_get_ticks();
 
     /* Cache the key code values in register to avoid repeated LDRs. */
     unsigned int emu_key_state_current = emu_key_state;
@@ -877,6 +961,9 @@ static void loop(struct gb_s * const gb) {
         );
         if (ret == MB_RESULT_YES) {
           break;
+        }
+        if (priv->config.sync_rtc_on_resume) {
+          _set_rtc(gb);
         }
         _input_poller_begin(gb);
         continue;
@@ -935,7 +1022,7 @@ static void loop(struct gb_s * const gb) {
     }
 
     if (priv->fallback_blit && !priv->p4_1line_buffer) {
-      _BitBlt(priv->real_fb, priv->x, priv->y, priv->width, priv->height, priv->fb, 0, 0, BLIT_NONE);
+      _BitBlt(priv->real_fb, priv->canvas_x, priv->canvas_y, priv->width, priv->height, priv->fb, 0, 0, BLIT_NONE);
     }
 
     if (emu_key_state_current & EMU_KEY_SRAM_COMMIT) {
@@ -971,21 +1058,14 @@ static void loop(struct gb_s * const gb) {
       frame_advance_cnt = 0;
     }
 
-    if (frame_limiter_type == FRAME_LIMITER_SCHED) {
-      current_millis = sched_timer_ticks;
-    } else {
-      GetSysTime(&dt);
-      current_millis = dt.millis;
-    }
+    current_time = mutekix_time_get_ticks();
 
-    short elapsed_millis = (current_millis >= last_millis) ? (current_millis - last_millis) : (1000 + current_millis - last_millis);
-    if (frame_limiter_type == FRAME_LIMITER_RTC_DOUBLE) {
-      elapsed_millis = elapsed_millis / 2;
-    }
-    short sleep_millis = frame_advance - elapsed_millis;
+    long long elapsed_time = (mutekix_time_get_quantum() == 500) ? (current_time - last_time) / 2 : current_time - last_time;
+
+    short sleep_millis = frame_advance - elapsed_time;
 
     if (holding_any_key && (button_hold_compensation_denom != 1 || button_hold_compensation_denom != 1)) {
-      sleep_millis -= elapsed_millis * button_hold_compensation_num / button_hold_compensation_denom;
+      sleep_millis -= elapsed_time * button_hold_compensation_num / button_hold_compensation_denom;
     }
 
     if (debug_show_delay_factor) {
@@ -999,7 +1079,7 @@ static void loop(struct gb_s * const gb) {
     }
 
     /* Yield from current thread so other threads (like the input poller) can be executed on-time */
-    if (frame_limiter_type == FRAME_LIMITER_RTC_DOUBLE) {
+    if (mutekix_time_get_quantum() == 500) {
       sleep_with_double_rtc(sleep_millis > 0 ? sleep_millis : 1);
     } else {
       OSSleep(sleep_millis > 0 ? sleep_millis : 1);
@@ -1007,28 +1087,55 @@ static void loop(struct gb_s * const gb) {
   }
 }
 
+static void _load_config(struct priv_s *priv) {
+  priv->config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, CONFIG_PATH);
+  priv->config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, CONFIG_PATH);
+  priv->config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, CONFIG_PATH);
+  priv->config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, CONFIG_PATH);
+  priv->config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, CONFIG_PATH) & 0xffff;
+  priv->config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, CONFIG_PATH) & 0xffff;
+  priv->config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, CONFIG_PATH);
+  priv->config.sync_rtc_on_resume = !!_GetPrivateProfileInt("Config", "SyncRTCOnResume", 0, CONFIG_PATH);
+  priv->config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, CONFIG_PATH);
+  priv->config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, CONFIG_PATH);
+
+  /* Filter out illegal values that may cause bad behavior. */
+  if (priv->config.button_hold_compensation_num == 0) {
+    priv->config.button_hold_compensation_num = 1;
+  }
+  if (priv->config.button_hold_compensation_denom == 0) {
+    priv->config.button_hold_compensation_denom = 1;
+  }
+}
+
+static void _load_key_binding() {
+  g_key_binding.a = _GetPrivateProfileInt("KeyBinding", "A", KEY_X, CONFIG_PATH);
+  g_key_binding.b = _GetPrivateProfileInt("KeyBinding", "B", KEY_Z, CONFIG_PATH);
+  g_key_binding.select = _GetPrivateProfileInt("KeyBinding", "Select", KEY_A, CONFIG_PATH);
+  g_key_binding.start = _GetPrivateProfileInt("KeyBinding", "Start", KEY_S, CONFIG_PATH);
+  g_key_binding.right = _GetPrivateProfileInt("KeyBinding", "Right", KEY_RIGHT, CONFIG_PATH);
+  g_key_binding.left = _GetPrivateProfileInt("KeyBinding", "Left", KEY_LEFT, CONFIG_PATH);
+  g_key_binding.up = _GetPrivateProfileInt("KeyBinding", "Up", KEY_UP, CONFIG_PATH);
+  g_key_binding.down = _GetPrivateProfileInt("KeyBinding", "Down", KEY_DOWN, CONFIG_PATH);
+  g_key_binding.reset_combo = _GetPrivateProfileInt("KeyBinding", "ResetCombo", KEY_R, CONFIG_PATH);
+
+  g_key_binding.quit = _GetPrivateProfileInt("KeyBinding", "Quit", KEY_ESC, CONFIG_PATH);
+  g_key_binding.mute = _GetPrivateProfileInt("KeyBinding", "Mute", KEY_M, CONFIG_PATH);
+  g_key_binding.reset_hard = _GetPrivateProfileInt("KeyBinding", "ResetHard", KEY_H, CONFIG_PATH);
+  g_key_binding.scroll_up = _GetPrivateProfileInt("KeyBinding", "ScrollUp", KEY_PGUP, CONFIG_PATH);
+  g_key_binding.scroll_down = _GetPrivateProfileInt("KeyBinding", "ScrollDown", KEY_PGDN, CONFIG_PATH);
+  g_key_binding.scroll_top = _GetPrivateProfileInt("KeyBinding", "ScrollTop", KEY_1, CONFIG_PATH);
+  g_key_binding.scroll_center = _GetPrivateProfileInt("KeyBinding", "ScrollCenter", KEY_2, CONFIG_PATH);
+  g_key_binding.scroll_bottom = _GetPrivateProfileInt("KeyBinding", "ScrollBottom", KEY_3, CONFIG_PATH);
+  g_key_binding.sram_commit = _GetPrivateProfileInt("KeyBinding", "SRAMCommit", KEY_SAVE, CONFIG_PATH);
+}
+
 int main(void) {
   static struct gb_s gb;
   static struct priv_s priv = {0};
 
-  priv.config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, CONFIG_PATH);
-  priv.config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, CONFIG_PATH);
-  priv.config.half_refresh = !!_GetPrivateProfileInt("Config", "HalfRefresh", 0, CONFIG_PATH);
-  priv.config.frame_limiter_type = _GetPrivateProfileInt("Config", "FrameLimiterType", FRAME_LIMITER_SCHED, CONFIG_PATH);
-  priv.config.sram_auto_commit = !!_GetPrivateProfileInt("Config", "SRAMAutoCommit", 1, CONFIG_PATH);
-  priv.config.button_hold_compensation_num = _GetPrivateProfileInt("Config", "ButtonHoldCompensationNum", 1, CONFIG_PATH) & 0xffff;
-  priv.config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, CONFIG_PATH) & 0xffff;
-  priv.config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, CONFIG_PATH);
-  priv.config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, CONFIG_PATH);
-  priv.config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, CONFIG_PATH);
-
-  /* Filter out illegal values that may cause bad behavior. */
-  if (priv.config.button_hold_compensation_num == 0) {
-    priv.config.button_hold_compensation_num = 1;
-  }
-  if (priv.config.button_hold_compensation_denom == 0) {
-    priv.config.button_hold_compensation_denom = 1;
-  }
+  _load_config(&priv);
+  _load_key_binding();
 
   int file_picker_result = rom_file_picker(&priv);
   if (file_picker_result > 0) {
@@ -1045,6 +1152,14 @@ int main(void) {
   rgbSetBkColor(lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 ? 0xffffff : 0x000000);
   SetFontType(MONOSPACE_CJK);
   ClearScreen(false);
+  WriteAlignString(
+    lcd->width / 2,
+    (lcd->height - GetFontHeight(MONOSPACE_CJK)) / 2,
+    _BUL("Loading..."),
+    lcd->width,
+    STR_ALIGN_CENTER,
+    PRINT_NONE
+  );
 
   priv.rom = _read_file(priv.rom_file_name, 0, false);
   if (priv.rom == NULL) {
@@ -1095,7 +1210,13 @@ int main(void) {
 
   if (lcd->surface->depth == LCD_SURFACE_PIXFMT_XRGB && !priv.config.debug_force_safe_framebuffer) {
     priv.fb = lcd->surface;
-    gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
+    priv.rotation = lcd->rotation;
+    /* Only use the rotation-aware blit when absolutely needed. Saves about 1-2ms on BA802. */
+    if (lcd->rotation != ROTATION_TOP_SIDE_FACING_UP) {
+      gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb_rot);
+    } else {
+      gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
+    }
   } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 && !priv.config.debug_force_safe_framebuffer) {
     /* 4-bit LCD machines don't have a hardware-backed framebuffer and
      * we need to blit a 160x1 buffer to the screen line-by-line. */
@@ -1125,10 +1246,7 @@ int main(void) {
   if (priv.config.enable_audio) {
     _sound_on(&gb);
   }
-
-  if (priv.config.frame_limiter_type == FRAME_LIMITER_SCHED) {
-    _sched_timer_start();
-  }
+  mutekix_time_init();
 
   _input_poller_begin(&gb);
   loop(&gb);
@@ -1136,7 +1254,7 @@ int main(void) {
 
   _write_save(&gb, priv.save_file_name);
 
-  _sched_timer_stop();
+  mutekix_time_fini();
   _sound_off(&gb);
 
   free(priv.rom);
