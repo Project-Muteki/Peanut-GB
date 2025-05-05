@@ -208,7 +208,7 @@ static inline bool _test_events_no_shift(ui_event_t *uievent) {
     return TestPendEvent(uievent) || TestKeyEvent(uievent);
 }
 
-static inline void _ext_ticker_s3c() {
+static inline void _ext_ticker_s3c(void) {
   static ui_event_t uievent = {0};
   unsigned int emu_key_state_local = emu_key_state, pad_key_state_local = pad_key_state;
 
@@ -236,7 +236,7 @@ static inline void _ext_ticker_s3c() {
   emu_key_state = emu_key_state_local;
 }
 
-static inline void _ext_ticker_dis() {
+static inline void _ext_ticker_dis(void) {
   static ui_event_t uievent = {0};
   static uint_fast16_t down_counter = 0;
   static short pressing0 = 0, pressing1 = 0;
@@ -361,7 +361,7 @@ static int _input_s3c_worker(void *user_data) {
   return 0;
 }
 
-static inline void _drain_all_events() {
+static inline void _drain_all_events(void) {
   ui_event_t uievent = {0};
   size_t silence_count = 0;
   while (silence_count < 60) {
@@ -1108,7 +1108,7 @@ static void _load_config(struct priv_s *priv) {
   }
 }
 
-static void _load_key_binding() {
+static void _load_key_binding(void) {
   g_key_binding.a = _GetPrivateProfileInt("KeyBinding", "A", KEY_X, CONFIG_PATH);
   g_key_binding.b = _GetPrivateProfileInt("KeyBinding", "B", KEY_Z, CONFIG_PATH);
   g_key_binding.select = _GetPrivateProfileInt("KeyBinding", "Select", KEY_A, CONFIG_PATH);
