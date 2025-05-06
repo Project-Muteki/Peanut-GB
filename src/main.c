@@ -57,6 +57,9 @@ static void audio_write(const uint16_t addr, const uint8_t val) {
   minigb_apu_audio_write(&g_apu_ctx, addr, val);
 }
 #else
+#ifndef AUDIO_SAMPLES_TOTAL
+#define AUDIO_SAMPLES_TOTAL AUDIO_SAMPLES * 2
+#endif
 typedef int16_t audio_sample_t;
 static void audio_callback_wrapper(audio_sample_t *samples) {
   audio_callback(NULL, (uint8_t *) samples, AUDIO_SAMPLES_TOTAL * 2);
@@ -64,10 +67,6 @@ static void audio_callback_wrapper(audio_sample_t *samples) {
 #endif  // LEGACY_APU
 
 #include "peanut_gb.h"
-
-#ifndef AUDIO_SAMPLES_TOTAL
-#define AUDIO_SAMPLES_TOTAL AUDIO_SAMPLES * 2
-#endif
 
 typedef enum {
   MULTI_PRESS_MODE_DIS = 0,
