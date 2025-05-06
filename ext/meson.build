@@ -5,5 +5,6 @@ ext_include = [ext_minigb_apu_include, ext_peanut_gb_include]
 ext_lib = static_library('ext',
   'Peanut-GB/examples/sdl2/minigb_apu/minigb_apu.c',
   include_directories : ext_include,
-  pic : false
+  pic : false,
+  c_args: ['-DMINIGB_APU_AUDIO_FORMAT_S16SYS'],
 )

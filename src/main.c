@@ -37,6 +37,32 @@
 #endif
 
 #include "minigb_apu.h"
+
+#ifndef LEGACY_APU
+struct minigb_apu_ctx g_apu_ctx;
+
+static void audio_init(void) {
+  minigb_apu_audio_init(&g_apu_ctx);
+}
+
+static void audio_callback_wrapper(audio_sample_t *samples) {
+  minigb_apu_audio_callback(&g_apu_ctx, samples);
+}
+
+static uint8_t audio_read(const uint16_t addr) {
+  return minigb_apu_audio_read(&g_apu_ctx, addr);
+}
+
+static void audio_write(const uint16_t addr, const uint8_t val) {
+  minigb_apu_audio_write(&g_apu_ctx, addr, val);
+}
+#else
+typedef int16_t audio_sample_t;
+static void audio_callback_wrapper(audio_sample_t *samples) {
+  audio_callback(NULL, (uint8_t *) samples, AUDIO_SAMPLES_TOTAL * 2);
+}
+#endif  // LEGACY_APU
+
 #include "peanut_gb.h"
 
 #ifndef AUDIO_SAMPLES_TOTAL
@@ -139,7 +165,7 @@ volatile uint8_t audio_buffer_producer_offset;
 volatile bool audio_running = false;
 volatile bool tim1_emulator_running = false;
 volatile unsigned short sched_timer_ticks = 0;
-int16_t audio_buffer[4][AUDIO_SAMPLES_TOTAL];
+audio_sample_t *audio_buffer = NULL;
 thread_t *audio_worker_inst = NULL;
 thread_t *input_worker_inst = NULL;
 thread_t *sched_timer_worker_inst = NULL;
@@ -305,7 +331,7 @@ static int _audio_worker(void *user_data) {
   while (audio_running) {
     uint8_t cbuf = audio_buffer_consumer_offset;
     if (cbuf != audio_buffer_producer_offset) {
-      WriteFile(pcmdev, audio_buffer[cbuf], AUDIO_SAMPLES_TOTAL * 2, &actual_size, NULL);
+      WriteFile(pcmdev, &audio_buffer[cbuf * AUDIO_SAMPLES_TOTAL], AUDIO_SAMPLES_TOTAL * 2, &actual_size, NULL);
       cbuf++;
       cbuf &= 3;
       audio_buffer_consumer_offset = cbuf;
@@ -433,7 +459,14 @@ static void _sound_on(struct gb_s *gb) {
   if (!priv->sound_on) {
     audio_buffer_consumer_offset = 0;
     audio_buffer_producer_offset = 0;
-    memset(audio_buffer, 0, sizeof(audio_buffer));
+    if (audio_buffer != NULL) {
+      free(audio_buffer);
+      audio_buffer = NULL;
+    }
+    audio_buffer = calloc(sizeof(*audio_buffer) * 4, AUDIO_SAMPLES_TOTAL);
+    if (audio_buffer == NULL) {
+      return;
+    }
     audio_shutdown_ack = OSCreateEvent(true, 1);
     audio_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &audio_worker_arg, 16384, false);
     OSSleep(1);
@@ -452,6 +485,10 @@ static void _sound_off(struct gb_s *gb) {
     if (audio_worker_inst != NULL) {
       OSTerminateThread(audio_worker_inst, 0);
       audio_worker_inst = NULL;
+    }
+    if (audio_buffer != NULL) {
+      free(audio_buffer);
+      audio_buffer = NULL;
     }
     priv->sound_on = false;
   }
@@ -1014,7 +1051,7 @@ static void loop(struct gb_s * const gb) {
     if (priv->sound_on) {
       uint8_t pbuf = audio_buffer_producer_offset;
       if (((pbuf + 1) & 3) != audio_buffer_consumer_offset) {
-        audio_callback(NULL, (uint8_t *) audio_buffer[pbuf], AUDIO_SAMPLES_TOTAL * 2);
+        audio_callback_wrapper(&audio_buffer[pbuf * AUDIO_SAMPLES_TOTAL]);
         pbuf++;
         pbuf &= 3;
         audio_buffer_producer_offset = pbuf;
