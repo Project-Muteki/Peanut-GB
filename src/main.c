@@ -11,7 +11,6 @@
 #include <muteki/ini.h>
 #include <muteki/threading.h>
 #include <muteki/utf16.h>
-#include <muteki/utils.h>
 #include <muteki/ui/canvas.h>
 #include <muteki/ui/font.h>
 #include <muteki/ui/event.h>
