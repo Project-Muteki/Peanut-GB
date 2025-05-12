@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <muteki/ui/common.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -136,6 +137,10 @@ const int PALETTE_P4[16] = {
 
 const uint8_t COLOR_MAP[4] = {
   0xff, 0xaa, 0x55, 0x00
+};
+
+const uint32_t COLOR_MAP_32[4] = {
+  0xffffffff, 0xffaaaaaa, 0xff555555, 0xff000000
 };
 
 #if PEANUT_FULL_GBC_SUPPORT
@@ -557,6 +562,9 @@ static void _precompute_yoff(struct gb_s *gb) {
     }
     for (size_t i = 0; i < LCD_WIDTH; i++) {
       priv->surface_yoff[i] = (x + i) * priv->fb->xsize + surface_xoff;
+      if (priv->fb->depth == LCD_SURFACE_PIXFMT_XRGB) {
+        priv->surface_yoff[i] /= 4;
+      }
     }
   } else {
     size_t surface_xoff = x;
@@ -572,6 +580,9 @@ static void _precompute_yoff(struct gb_s *gb) {
 
     for (size_t i = 0; i < LCD_HEIGHT; i++) {
       priv->surface_yoff[i] = (y + i) * priv->fb->xsize + surface_xoff;
+      if (priv->fb->depth == LCD_SURFACE_PIXFMT_XRGB) {
+        priv->surface_yoff[i] /= 4;
+      }
     }
   }
 }
@@ -724,10 +735,11 @@ void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const u
       break;
     }
 
-    size_t pixel_offset = priv->surface_yoff[line] + x * 4;
+    size_t pixel_offset = priv->surface_yoff[line] + x;
 
 #if PEANUT_FULL_GBC_SUPPORT
     if (gb->cgb.cgbMode) {
+      pixel_offset *= 4;
       uint16_t pixel = gb->cgb.fixPalette[pixels[x]];
       ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP_CGB[pixel & 0x001f];
       ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP_CGB[(pixel & 0x03e0) >> 5];
@@ -736,10 +748,7 @@ void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const u
     } else {
 #endif
       /* TODO palette */
-      ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP[pixels[x] & 3];
-      ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP[pixels[x] & 3];
-      ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP[pixels[x] & 3];
-      ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+      ((uint32_t *) fb->buffer)[pixel_offset] = COLOR_MAP_32[pixels[x] & 3];
 #if PEANUT_FULL_GBC_SUPPORT
     }
 #endif
@@ -763,22 +772,23 @@ void lcd_draw_line_fast_xrgb_rot(struct gb_s *gb, const uint8_t pixels[160], con
     switch (priv->rotation) {
       case ROTATION_TOP_SIDE_FACING_UP:
       default:
-        pixel_offset = priv->surface_yoff[line] + x * 4;
+        pixel_offset = priv->surface_yoff[line] + x;
         break;
       case ROTATION_TOP_SIDE_FACING_LEFT:
-        pixel_offset = priv->surface_yoff[LCD_WIDTH - 1 - x] + line * 4;
+        pixel_offset = priv->surface_yoff[LCD_WIDTH - 1 - x] + line;
         break;
       case ROTATION_TOP_SIDE_FACING_DOWN:
-        pixel_offset = priv->surface_yoff[LCD_HEIGHT - 1 - line] + (LCD_WIDTH - 1 - x) * 4;
+        pixel_offset = priv->surface_yoff[LCD_HEIGHT - 1 - line] + (LCD_WIDTH - 1 - x);
         break;
       case ROTATION_TOP_SIDE_FACING_RIGHT:
-        pixel_offset = priv->surface_yoff[x] + (LCD_HEIGHT - 1 - line) * 4;
+        pixel_offset = priv->surface_yoff[x] + (LCD_HEIGHT - 1 - line);
         break;
     }
     
 
 #if PEANUT_FULL_GBC_SUPPORT
     if (gb->cgb.cgbMode) {
+      pixel_offset *= 4;
       uint16_t pixel = gb->cgb.fixPalette[pixels[x]];
       ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP_CGB[pixel & 0x001f];
       ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP_CGB[(pixel & 0x03e0) >> 5];
@@ -787,10 +797,7 @@ void lcd_draw_line_fast_xrgb_rot(struct gb_s *gb, const uint8_t pixels[160], con
     } else {
 #endif
       /* TODO palette */
-      ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP[pixels[x] & 3];
-      ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP[pixels[x] & 3];
-      ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP[pixels[x] & 3];
-      ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+      ((uint32_t *) fb->buffer)[pixel_offset] = COLOR_MAP_32[pixels[x] & 3];
 #if PEANUT_FULL_GBC_SUPPORT
     }
 #endif
