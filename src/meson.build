@@ -8,7 +8,7 @@ elf = executable('Peanut-GB',
   dependencies: mutekix_lib,
   link_with : ext_lib,
   install : false,
-  c_args: ['-DMINIGB_APU_AUDIO_FORMAT_S16SYS'])
+  c_args: ['-DMINIGB_APU_AUDIO_FORMAT_S16SYS', '-DLEGACY_DETECT_SAVE'])
 
 if romtool.found() and elf2bestape.found()
   romspec = custom_target('romspec',
@@ -31,7 +31,7 @@ elf = executable('Peanut-GBC',
   dependencies: mutekix_lib,
   link_with : ext_lib,
   install : false,
-  c_args: ['-DPEANUT_FULL_GBC_SUPPORT', '-DMANUAL_RTC_NEEDED', '-DLEGACY_APU'],
+  c_args: ['-DPEANUT_FULL_GBC_SUPPORT', '-DMANUAL_RTC_NEEDED', '-DLEGACY_APU', '-DLEGACY_DETECT_SAVE'],
   build_by_default: false)
 
 if romtool.found() and elf2bestape.found()

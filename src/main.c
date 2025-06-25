@@ -1,5 +1,6 @@
 #include <inttypes.h>
 #include <muteki/ui/common.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,6 +69,18 @@ static void audio_callback_wrapper(audio_sample_t *samples) {
 
 #include "peanut_gb.h"
 
+#ifdef LEGACY_DETECT_SAVE
+// Compatibility function with older Peanut-GB that rejects obviously bad returns.
+static int gb_get_save_size_s(struct gb_s *gb, size_t *ram_size) {
+  uint_fast32_t ram_size_unsigned = gb_get_save_size(gb);
+  if (ram_size_unsigned > 0x20000u || ram_size_unsigned % 512 != 0) {
+    return -1;
+  }
+  *ram_size = ram_size_unsigned;
+  return 0;
+}
+#endif
+
 typedef enum {
   MULTI_PRESS_MODE_DIS = 0,
   MULTI_PRESS_MODE_NATIVE_S3C,
@@ -112,6 +125,8 @@ static int _input_dis_worker(void *user_data);
 static int _input_s3c_worker(void *user_data);
 static unsigned int _map_emu_key_state(unsigned short key);
 static uint8_t _map_pad_state(unsigned short key);
+static void exit_cleanup(const struct gb_s * const gb);
+static int messagebox_format(unsigned short type, const char *fmt, ...);
 
 static mutekix_thread_arg_t audio_worker_arg = {
   .func = &_audio_worker,
@@ -195,6 +210,7 @@ struct priv_s {
   uint8_t *rom;
   /* Pointer to allocated memory holding save file. */
   uint8_t *cart_ram;
+  size_t cart_ram_size;
 
   /* Framebuffer objects. */
   lcd_surface_t *fb;
@@ -620,7 +636,7 @@ static uint8_t *_read_file(const char *path, size_t size, bool allocate_anyway) 
 
 static void _write_save(struct gb_s *gb, const char *path) {
   struct priv_s *priv = gb->direct.priv;
-  size_t save_size = gb_get_save_size(gb);
+  size_t save_size = priv->cart_ram_size;
   if (priv->cart_ram == NULL || save_size == 0) {
     return;
   }
@@ -827,9 +843,6 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
     "INVALID WRITE",
     "HALT FOREVER"
   };
-  struct priv_s *priv = gb->direct.priv;
-  char error_msg[256];
-  UTF16 error_msg_w[256];
   char location[64] = "";
   uint8_t instr_byte;
 
@@ -853,23 +866,14 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
 
   instr_byte = __gb_read(gb, addr);
 
-  sniprintf(error_msg, sizeof(error_msg),
+  messagebox_format(MB_ICON_ERROR | MB_BUTTON_OK,
     "Error: %s at 0x%04X%s with instruction %02X.\n"
     "Cart RAM saved to recovery.sav\n"
     "Exiting.\n",
     gb_err_str[gb_err], addr, location, instr_byte);
 
-  ConvStrToUnicode(error_msg, error_msg_w, MB_ENCODING_UTF8);
-  MessageBox(error_msg_w, MB_ICON_ERROR | MB_BUTTON_OK);
-
   /* Free memory and then exit. */
-  free(priv->rom);
-  if (priv->cart_ram != NULL) {
-    free(priv->cart_ram);
-  }
-  if (priv->fallback_blit) {
-    free(priv->fb);
-  }
+  exit_cleanup(gb);
   exit(1);
 }
 
@@ -1216,24 +1220,17 @@ int main(void) {
 
   case GB_INIT_CARTRIDGE_UNSUPPORTED:
     MessageBox(_BUL("Unsupported cartridge."), MB_DEFAULT);
-    free(priv.rom);
-    priv.rom = NULL;
+    exit_cleanup(&gb);
     return 1;
 
   case GB_INIT_INVALID_CHECKSUM:
     MessageBox(_BUL("Invalid ROM: Checksum failure."), MB_DEFAULT);
-    free(priv.rom);
-    priv.rom = NULL;
+    exit_cleanup(&gb);
     return 1;
 
   default: {
-    char message[64] = {0};
-    UTF16 messagew[64] = {0};
-    sniprintf(message, sizeof(message), "Unknown error: %d", gb_ret);
-    ConvStrToUnicode(message, messagew, MB_ENCODING_UTF8);
-    MessageBox(messagew, MB_DEFAULT);
-    free(priv.rom);
-    priv.rom = NULL;
+    messagebox_format(MB_DEFAULT, "Unknown error: %d", gb_ret);
+    exit_cleanup(&gb);
     return 1;
   }
   }
@@ -1241,11 +1238,19 @@ int main(void) {
   _set_rtc(&gb);
   audio_init();
 
-  if (gb_get_save_size(&gb) != 0) {
-    priv.cart_ram = _read_file(priv.save_file_name, gb_get_save_size(&gb), true);
+  if (gb_get_save_size_s(&gb, &priv.cart_ram_size) < 0) {
+    MessageBox(_BUL("Unable to get save size."), MB_BUTTON_OK | MB_ICON_ERROR);
+    exit_cleanup(&gb);
+    return 1;
+  }
+  if (priv.cart_ram_size != 0) {
+    priv.cart_ram = _read_file(priv.save_file_name, priv.cart_ram_size, true);
     if (priv.cart_ram == NULL) {
-      free(priv.rom);
-      priv.rom = NULL;
+      MessageBox(
+        _BUL("Save data is available but the emulator is unable to load it."),
+        MB_BUTTON_OK | MB_ICON_ERROR
+      );
+      exit_cleanup(&gb);
       return 1;
     }
   }
@@ -1299,12 +1304,38 @@ int main(void) {
   mutekix_time_fini();
   _sound_off(&gb);
 
-  free(priv.rom);
-  if (priv.cart_ram != NULL) {
-    free(priv.cart_ram);
-  }
-  if (priv.fallback_blit) {
-    free(priv.fb);
-  }
+  exit_cleanup(&gb);
   return 0;
+}
+
+static void exit_cleanup(const struct gb_s * const gb) {
+  struct priv_s * const priv = gb->direct.priv;
+  if (priv->rom != NULL) {
+    free(priv->rom);
+    priv->rom = NULL;
+  }
+  
+  if (priv->cart_ram != NULL) {
+    free(priv->cart_ram);
+    priv->cart_ram = NULL;
+  }
+
+  if (priv->fallback_blit) {
+    free(priv->fb);
+    priv->fb = NULL;
+  }
+}
+
+static int messagebox_format(unsigned short type, const char *fmt, ...) {
+  va_list va;
+
+  static char message[256] = {0};
+  static UTF16 messagew[256] = {0};
+
+  va_start(va, fmt);
+  vsniprintf(message, sizeof(message), fmt, va);
+  va_end(va);
+
+  ConvStrToUnicode(message, messagew, MB_ENCODING_UTF8);
+  return MessageBox(messagew, type);
 }
