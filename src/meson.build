@@ -1,7 +1,7 @@
 c = meson.get_compiler('c')
 mutekix_lib = c.find_library('mutekix', required : true)
 
-elf = executable('Peanut-GB',
+elf = executable('wb',
   'main.c',
   include_directories : ext_include,
   name_suffix: 'elf',
@@ -17,14 +17,14 @@ if romtool.found() and elf2bestape.found()
     command: [romtool, 'build', '@INPUT@', '-o', '@OUTPUT@'],
     build_by_default: true)
 
-  custom_target('Peanut-GB-bestape',
+  custom_target('wb-bestape',
     input: [elf, romspec],
-    output: 'Peanut-GB.exe',
+    output: 'wb.exe',
     command: [elf2bestape, '-o', '@OUTPUT@', '-r', '@INPUT1@', '@INPUT0@'],
     build_by_default: true)
 endif
 
-elf = executable('Peanut-GBC',
+elf = executable('wbc',
   'main.c',
   include_directories : ext_gbc_include,
   name_suffix: 'elf',
@@ -32,18 +32,18 @@ elf = executable('Peanut-GBC',
   link_with : ext_gbc_lib,
   install : false,
   c_args: ['-DPEANUT_FULL_GBC_SUPPORT=1', '-DMINIGB_APU_AUDIO_FORMAT_S16SYS'],
-  build_by_default: false)
+  build_by_default: true)
 
 if romtool.found() and elf2bestape.found()
   romspec_cgb = custom_target('romspec-cgb',
     input: 'romspec.cgb.toml',
     output: 'romspec.cgb.rom',
     command: [romtool, 'build', '@INPUT@', '-o', '@OUTPUT@'],
-    build_by_default: false)
+    build_by_default: true)
 
-  custom_target('Peanut-GBC-bestape',
+  custom_target('wbc-bestape',
     input: [elf, romspec_cgb],
-    output: 'Peanut-GBC.exe',
+    output: 'wbc.exe',
     command: [elf2bestape, '-o', '@OUTPUT@', '-r', '@INPUT1@', '@INPUT0@'],
-    build_by_default: false)
+    build_by_default: true)
 endif

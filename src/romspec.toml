@@ -1,16 +1,15 @@
 [rom]
-title = "Peanut-GB Emulator"
-short-title = "Peanut-GB"
+title = "WoodyBoy Emulator"
+short-title = "WB"
 category = "APPLET_GAME"
-subtype = 0
 default-locale = "en"
 copyright = """\
 Copyright (c) 2018-2025 Mahyar Koshkouei
 Copyright (c) 2024-2025 dogtopus
 SPDX-License-Identifier: MIT\
 """
-version = "1.2.0"
+version = "1.3.0"
 
 [metadata.en]
-title = "Peanut-GB Emulator"
-short-title = "Peanut-GB"
+title = "WoodyBoy"
+short-title = "WB"

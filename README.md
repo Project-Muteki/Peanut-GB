@@ -1,6 +1,6 @@
-# Peanut-GB
+# WoodyBoy
 
-A port of Peanut-GB to Besta RTOS.
+A Game Boy emulator running on Besta RTOS, based on Peanut-GB.
 
 ## Features
 
