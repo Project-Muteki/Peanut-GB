@@ -1,7 +1,7 @@
 c = meson.get_compiler('c')
 mutekix_lib = c.find_library('mutekix', required : true)
 
-elf = executable('wb',
+wb = executable('wb',
   'main.c',
   include_directories : ext_include,
   name_suffix: 'elf',
@@ -18,13 +18,13 @@ if romtool.found() and elf2bestape.found()
     build_by_default: true)
 
   custom_target('wb-bestape',
-    input: [elf, romspec],
+    input: [wb, romspec],
     output: 'wb.exe',
     command: [elf2bestape, '-o', '@OUTPUT@', '-r', '@INPUT1@', '@INPUT0@'],
     build_by_default: true)
 endif
 
-elf = executable('wbc',
+wbc = executable('wbc',
   'main.c',
   include_directories : ext_gbc_include,
   name_suffix: 'elf',
@@ -42,7 +42,7 @@ if romtool.found() and elf2bestape.found()
     build_by_default: true)
 
   custom_target('wbc-bestape',
-    input: [elf, romspec_cgb],
+    input: [wbc, romspec_cgb],
     output: 'wbc.exe',
     command: [elf2bestape, '-o', '@OUTPUT@', '-r', '@INPUT1@', '@INPUT0@'],
     build_by_default: true)
