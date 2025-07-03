@@ -26,12 +26,12 @@ endif
 
 elf = executable('Peanut-GBC',
   'main.c',
-  include_directories : ext_include,
+  include_directories : ext_gbc_include,
   name_suffix: 'elf',
   dependencies: mutekix_lib,
-  link_with : ext_lib,
+  link_with : ext_gbc_lib,
   install : false,
-  c_args: ['-DPEANUT_FULL_GBC_SUPPORT', '-DMANUAL_RTC_NEEDED', '-DLEGACY_APU', '-DLEGACY_DETECT_SAVE'],
+  c_args: ['-DPEANUT_FULL_GBC_SUPPORT', '-DMINIGB_APU_AUDIO_FORMAT_S16SYS'],
   build_by_default: false)
 
 if romtool.found() and elf2bestape.found()
