@@ -901,8 +901,9 @@ static int rom_file_picker(struct priv_s * const priv) {
   ctx.ctx_size = sizeof(ctx);
   ctx.path_max_cu = FILEPICKER_CONTEXT_OUTPUT_MAX_LFN;
   ctx.type_list = (
-    "Game Boy ROM Files (*.gb, *.gbc)\0*.gb|*.gbc\0"
+    "Game Boy ROM Files (*.gb, *.sgb, *.gbc)\0*.gb|*.sgb|*.gbc\0"
     "DMG ROM Files (*.gb)\0*.gb\0"
+    "SGB ROM Files (*.sgb)\0*.sgb\0"
     "CGB ROM Files (*.gbc)\0*.gbc\0"
     "All Files (*.*)\0*.*\0"
     "\0\0\0"
