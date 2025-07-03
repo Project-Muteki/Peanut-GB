@@ -609,7 +609,7 @@ static uint8_t *_read_file(const char *path, size_t size, bool allocate_anyway) 
   FILE *f = fopen(path, "rb");
   if (f == NULL) {
     if (allocate_anyway && size > 0) {
-      return (uint8_t *) malloc(size);
+      return (uint8_t *) calloc(size, sizeof(uint8_t));
     }
     return NULL;
   }
