@@ -165,6 +165,7 @@ const uint8_t COLOR_MAP_CGB[32] = {
   0x84, 0x8c, 0x94, 0x9c, 0xa5, 0xad, 0xb5, 0xbd,
   0xc5, 0xce, 0xd6, 0xde, 0xe6, 0xef, 0xf7, 0xff
 };
+uint32_t *color_map_cgb_32 = NULL;
 #endif
 
 const char SAVE_FILE_SUFFIX[] = ".sav";
@@ -690,6 +691,25 @@ static uint8_t _map_pad_state(unsigned short key) {
   return state;
 }
 
+#if PEANUT_FULL_GBC_SUPPORT
+static uint32_t *generate_cgb_table(void) {
+  const uint16_t colors = 32 * 32 * 32;
+  uint32_t *result = calloc(colors, sizeof(result));
+  if (result == NULL) {
+    return NULL;
+  }
+  for (uint16_t pixel = 0; pixel < colors; pixel++) {
+    result[pixel] = (
+      0xff000000 |
+      (COLOR_MAP_CGB[(pixel & 0x7c00) >> 10] << 16) |
+      (COLOR_MAP_CGB[(pixel & 0x03e0) >> 5] << 8) |
+      COLOR_MAP_CGB[pixel & 0x001f]
+    );
+  }
+  return result;
+}
+#endif
+
 void lcd_draw_line_safe(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
   const struct priv_s * const priv = gb->direct.priv;
   lcd_surface_t *fb = priv->fb;
@@ -755,12 +775,8 @@ void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const u
 
 #if PEANUT_FULL_GBC_SUPPORT
     if (gb->cgb.cgbMode) {
-      pixel_offset *= 4;
       uint16_t pixel = gb->cgb.fixPalette[pixels[x]];
-      ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP_CGB[pixel & 0x001f];
-      ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP_CGB[(pixel & 0x03e0) >> 5];
-      ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP_CGB[(pixel & 0x7c00) >> 10];
-      ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+      ((uint32_t *) fb->buffer)[pixel_offset] = color_map_cgb_32[pixel];
     } else {
 #endif
       /* TODO palette */
@@ -804,12 +820,8 @@ void lcd_draw_line_fast_xrgb_rot(struct gb_s *gb, const uint8_t pixels[160], con
 
 #if PEANUT_FULL_GBC_SUPPORT
     if (gb->cgb.cgbMode) {
-      pixel_offset *= 4;
       uint16_t pixel = gb->cgb.fixPalette[pixels[x]];
-      ((uint8_t *) fb->buffer)[pixel_offset + 0] = COLOR_MAP_CGB[pixel & 0x001f];
-      ((uint8_t *) fb->buffer)[pixel_offset + 1] = COLOR_MAP_CGB[(pixel & 0x03e0) >> 5];
-      ((uint8_t *) fb->buffer)[pixel_offset + 2] = COLOR_MAP_CGB[(pixel & 0x7c00) >> 10];
-      ((uint8_t *) fb->buffer)[pixel_offset + 3] = 0xff;
+      ((uint32_t *) fb->buffer)[pixel_offset] = color_map_cgb_32[pixel];
     } else {
 #endif
       /* TODO palette */
@@ -1257,6 +1269,19 @@ int main(void) {
   }
 
   if (lcd->surface->depth == LCD_SURFACE_PIXFMT_XRGB && !priv.config.debug_force_safe_framebuffer) {
+#if PEANUT_FULL_GBC_SUPPORT
+    if (gb.cgb.cgbMode) {
+      color_map_cgb_32 = generate_cgb_table();
+      if (color_map_cgb_32 == NULL) {
+        MessageBox(
+          _BUL("Cannot allocate memory for fast CGB color table."),
+          MB_BUTTON_OK | MB_ICON_ERROR
+        );
+        exit_cleanup(&gb);
+        return 1;
+      }
+    }
+#endif
     priv.fb = lcd->surface;
     priv.rotation = lcd->rotation;
     /* Only use the rotation-aware blit when absolutely needed. Saves about 1-2ms on BA802. */
@@ -1325,6 +1350,13 @@ static void exit_cleanup(const struct gb_s * const gb) {
     free(priv->fb);
     priv->fb = NULL;
   }
+
+#if PEANUT_FULL_GBC_SUPPORT
+  if (color_map_cgb_32 != NULL) {
+    free(color_map_cgb_32);
+    color_map_cgb_32 = NULL;
+  }
+#endif
 }
 
 static int messagebox_format(unsigned short type, const char *fmt, ...) {
