@@ -1301,6 +1301,15 @@ int main(void) {
     memcpy(priv.fb->palette, PALETTE_P4, sizeof(PALETTE_P4));
     gb_init_lcd(&gb, &lcd_draw_line_fast_p4);
   } else {
+    if (priv.config.debug_force_safe_framebuffer) {
+      MessageBox(_BUL("Forcing safe mode. Expect poor performance."), MB_BUTTON_OK | MB_ICON_WARNING);
+    } else {
+      messagebox_format(
+        MB_BUTTON_OK | MB_ICON_WARNING,
+        "Fast blit not available for surface bit depth %d. Will use safe mode. Expect poor performance.",
+        lcd->surface->depth
+      );
+    }
     priv.fallback_blit = true;
     priv.fb = (lcd_surface_t *) calloc(GetImageSizeExt(LCD_WIDTH, LCD_HEIGHT, LCD_SURFACE_PIXFMT_L4), 1);
     priv.real_fb = lcd->surface;
