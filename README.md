@@ -98,8 +98,8 @@ SyncRTCOnResume = 0
 ; mode.
 ;
 ; Supported screen variants:
-; - Type 1: The LCD used by CA106 (untested as my unit is bricked).
-; - Type 2: The LCD used by BA101.
+; - Type 1: The LCD used by BA101.
+; - Type 2: The LCD used by CA106 (untested as my unit is bricked).
 L4LCDType = 0
 
 [Debug]
