@@ -69,6 +69,10 @@ static void audio_callback_wrapper(audio_sample_t *samples) {
 
 #include "peanut_gb.h"
 
+#define SA7101_LCD_CTRL_SET_CURSOR_Y (0x20);
+#define SA7101_LCD_CTRL_SET_CURSOR_X (0x21);
+#define SA7101_LCD_CTRL_SET_PIXELS (0x22);
+
 volatile uint16_t * const SA7101_LCD_CTRL = (volatile uint16_t *) 0x88000000;
 volatile uint16_t * const SA7101_LCD_DATA = (volatile uint16_t *) 0x88400020;
 
@@ -159,6 +163,10 @@ const uint8_t COLOR_MAP[4] = {
 
 const uint16_t COLOR_MAP_16[4] = {
   0xffff, 0xaaaa, 0x5555, 0x0000
+};
+
+const uint16_t COLOR_MAP_16_BGR565[4] = {
+  0xffff, 0xad55, 0x52aa, 0x0000
 };
 
 const uint32_t COLOR_MAP_32[4] = {
@@ -723,6 +731,23 @@ static uint16_t *generate_cgb_table_rgb565(void) {
   return result;
 }
 
+static uint16_t *generate_cgb_table_bgr565(void) {
+  const uint16_t colors = 32 * 32 * 32;
+  uint16_t *result = calloc(colors, sizeof(result));
+  if (result == NULL) {
+    return NULL;
+  }
+  for (uint16_t pixel = 0; pixel < colors; pixel++) {
+    result[pixel] = (
+      ((pixel & 0x7c00) >> 10) |
+      ((pixel & 0x03e0) << 1) |
+      ((pixel & 0x0200) ? 0x0020 : 0x0000) |
+      ((pixel & 0x001f) << 11)
+    );
+  }
+  return result;
+}
+
 static uint32_t *generate_cgb_table_xrgb(void) {
   const uint16_t colors = 32 * 32 * 32;
   uint32_t *result = calloc(colors, sizeof(result));
@@ -894,27 +919,32 @@ void lcd_draw_line_fast_rgb565(struct gb_s *gb, const uint8_t pixels[160], const
 
 void lcd_draw_line_fast_rgb565_sa7101(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
   const struct priv_s * const priv = gb->direct.priv;
-  lcd_surface_t *fb = priv->fb;
 
   if (line >= priv->height) {
     return;
   }
+
+  *SA7101_LCD_DATA;
+  *SA7101_LCD_CTRL = SA7101_LCD_CTRL_SET_CURSOR_Y;
+  *SA7101_LCD_DATA = priv->canvas_y + line;
+  *SA7101_LCD_CTRL = SA7101_LCD_CTRL_SET_CURSOR_X;
+  *SA7101_LCD_DATA = priv->canvas_x;
+  *SA7101_LCD_CTRL = SA7101_LCD_CTRL_SET_PIXELS;
+  *SA7101_LCD_DATA;
 
   for (size_t x = 0; x < LCD_WIDTH; x++) {
     if (x >= priv->width) {
       break;
     }
 
-    size_t pixel_offset = priv->surface_yoff[line] + x;
-
 #if PEANUT_FULL_GBC_SUPPORT
     if (gb->cgb.cgbMode) {
       uint16_t pixel = gb->cgb.fixPalette[pixels[x]];
-      ((uint16_t *) fb->buffer)[pixel_offset] = color_map_cgb_16[pixel];
+      *SA7101_LCD_DATA = color_map_cgb_16[pixel];
     } else {
 #endif
       /* TODO palette */
-      ((uint16_t *) fb->buffer)[pixel_offset] = COLOR_MAP_16[pixels[x] & 3];
+      *SA7101_LCD_DATA = COLOR_MAP_16_BGR565[pixels[x] & 3];
 #if PEANUT_FULL_GBC_SUPPORT
     }
 #endif
@@ -1380,9 +1410,10 @@ int main(void) {
       gb_init_lcd(&gb, &lcd_draw_line_fast_xrgb);
     }
   } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_RGB565 && !priv.config.debug_force_safe_framebuffer) {
+    bool is_sa7101 = ((uintptr_t) lcd->surface->buffer) == ((uintptr_t) SA7101_LCD_DATA);
 #if PEANUT_FULL_GBC_SUPPORT
     if (gb.cgb.cgbMode) {
-      color_map_cgb_16 = generate_cgb_table_rgb565();
+      color_map_cgb_16 = is_sa7101 ? generate_cgb_table_bgr565() : generate_cgb_table_rgb565();
       if (color_map_cgb_16 == NULL) {
         MessageBox(
           _BUL("Cannot allocate memory for fast CGB color table."),
@@ -1395,7 +1426,7 @@ int main(void) {
 #endif
     priv.fb = lcd->surface;
     priv.rotation = ROTATION_TOP_SIDE_FACING_UP;
-    if (((uintptr_t) lcd->surface->buffer) == ((uintptr_t) SA7101_LCD_DATA)) {
+    if (is_sa7101) {
       gb_init_lcd(&gb, &lcd_draw_line_fast_rgb565_sa7101);
     } else {
       gb_init_lcd(&gb, &lcd_draw_line_fast_rgb565);
