@@ -69,9 +69,15 @@ static void audio_callback_wrapper(audio_sample_t *samples) {
 
 #include "peanut_gb.h"
 
-#define SA7101_LCD_CTRL_SET_CURSOR_Y (0x20);
-#define SA7101_LCD_CTRL_SET_CURSOR_X (0x21);
-#define SA7101_LCD_CTRL_SET_PIXELS (0x22);
+#define SA7101_LCD_CTRL_SET_CURSOR_Y (0x20)
+#define SA7101_LCD_CTRL_SET_CURSOR_X (0x21)
+#define SA7101_LCD_CTRL_SET_CURSOR_P4 (0x21)
+#define SA7101_LCD_CTRL_SET_PIXELS (0x22)
+#define SA7101_LCD_CTRL_SET_CURSOR_P4_X_UPPER (0x10)
+#define SA7101_LCD_CTRL_SET_CURSOR_P4_X_LOWER (0x00)
+#define SA7101_LCD_CTRL_SET_CURSOR_P4_Y_UPPER (0x70)
+#define SA7101_LCD_CTRL_SET_CURSOR_P4_Y_LOWER (0x60)
+#define SA7101_LCD_CTRL_SET_PIXELS (0x22)
 
 volatile uint16_t * const SA7101_LCD_CTRL = (volatile uint16_t *) 0x88000000;
 volatile uint16_t * const SA7101_LCD_DATA = (volatile uint16_t *) 0x88400020;
@@ -157,6 +163,10 @@ const int PALETTE_P4[16] = {
   0xcccccc, 0xdddddd, 0xeeeeee, 0xffffff,
 };
 
+const uint8_t COLOR_MAP_4[4] = {
+  0x0, 0x5, 0xa, 0xf
+};
+
 const uint8_t COLOR_MAP[4] = {
   0xff, 0xaa, 0x55, 0x00
 };
@@ -213,6 +223,7 @@ struct priv_config_s {
   short button_hold_compensation_num;
   short button_hold_compensation_denom;
   multi_press_mode_t multi_press_mode;
+  int l4_lcd_type;
   bool enable_audio;
   bool interlace;
   bool half_refresh;
@@ -238,6 +249,7 @@ struct priv_s {
   int rotation;
   unsigned short canvas_x;
   unsigned short canvas_y;
+  unsigned short canvas_x_triplet;
   unsigned short yskip;
   unsigned short width;
   unsigned short height;
@@ -540,6 +552,7 @@ static void _set_blit_parameter(struct gb_s *gb, const lcd_surface_t * const sur
 
   if (surface == NULL) {
     priv->canvas_x = 0;
+    priv->canvas_x_triplet = 0;
     priv->canvas_y = 0;
     priv->width = LCD_WIDTH;
     priv->height = LCD_HEIGHT;
@@ -558,9 +571,11 @@ static void _set_blit_parameter(struct gb_s *gb, const lcd_surface_t * const sur
   int xoff = (ww - LCD_WIDTH) / 2, yoff = (hh - LCD_HEIGHT) / 2;
   if (xoff <= 0) {
     priv->canvas_x = 0;
+    priv->canvas_x_triplet = 0;
     priv->width = ww;
   } else {
     priv->canvas_x = xoff;
+    priv->canvas_x_triplet = xoff / 3;
     priv->width = LCD_WIDTH;
   }
   if (yoff <= 0) {
@@ -812,6 +827,96 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
   }
 
   _BitBlt(priv->real_fb, priv->canvas_x & 0xfffe, priv->canvas_y + line - priv->yskip, LCD_WIDTH, 1, priv->fb, 0, 0, BLIT_NONE);
+}
+
+void lcd_draw_line_fast_p4_sa7101_t1(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
+  uint32_t p0, p1, p2;
+  const struct priv_s * const priv = gb->direct.priv;
+
+  if (line >= priv->height + priv->yskip || line < priv->yskip) {
+    return;
+  }
+
+  *SA7101_LCD_CTRL = SA7101_LCD_CTRL_SET_CURSOR_P4;
+  *SA7101_LCD_DATA = ((priv->canvas_y + line) << 8) | (priv->canvas_x_triplet + 0x34);
+  *SA7101_LCD_CTRL = SA7101_LCD_CTRL_SET_PIXELS;
+
+  for (size_t x = 0; x < LCD_WIDTH / 4 - 1; x += 3) {
+
+#if PEANUT_FULL_GBC_SUPPORT
+    if (gb->cgb.cgbMode) {
+      // TODO
+    } else {
+#endif
+      p0 = ((uint32_t *) pixels)[x];
+      p1 = ((uint32_t *) pixels)[x + 1];
+      p2 = ((uint32_t *) pixels)[x + 2];
+      *SA7101_LCD_DATA = (COLOR_MAP_4[p0 & 0x3] << 12) | (COLOR_MAP_4[(p0 & 0x300) >> 8] << 7) | (COLOR_MAP_4[(p0 & 0x30000) >> 16] << 1);
+      *SA7101_LCD_DATA = (COLOR_MAP_4[(p0 & 0x3000000) >> 24] << 12) | (COLOR_MAP_4[p1 & 0x3] << 7) | (COLOR_MAP_4[(p1 & 0x300) >> 8] << 1);
+      *SA7101_LCD_DATA = (COLOR_MAP_4[(p1 & 0x30000) >> 16] << 12) | (COLOR_MAP_4[(p1 & 0x3000000) >> 24] << 7) | (COLOR_MAP_4[p2 & 0x3] << 1);
+      *SA7101_LCD_DATA = (COLOR_MAP_4[(p2 & 0x300) >> 8] << 12) | (COLOR_MAP_4[(p2 & 0x30000) >> 16] << 7) | (COLOR_MAP_4[(p2 & 0x3000000) >> 24] << 1);
+#if PEANUT_FULL_GBC_SUPPORT
+    }
+#endif
+  }
+
+#if PEANUT_FULL_GBC_SUPPORT
+    if (gb->cgb.cgbMode) {
+      // TODO
+    } else {
+#endif
+      p0 = ((uint32_t *) pixels)[LCD_WIDTH / 4 - 1];
+      *SA7101_LCD_DATA = (COLOR_MAP_4[p0 & 0x3] << 12) | (COLOR_MAP_4[(p0 & 0x300) >> 8] << 7) | (COLOR_MAP_4[(p0 & 0x30000) >> 16] << 1);
+      *SA7101_LCD_DATA = (COLOR_MAP_4[(p0 & 0x3000000) >> 24] << 12);
+#if PEANUT_FULL_GBC_SUPPORT
+    }
+#endif
+}
+
+void lcd_draw_line_fast_p4_sa7101_t2(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
+  uint32_t p0, p1, p2;
+  const struct priv_s * const priv = gb->direct.priv;
+
+  if (line >= priv->height + priv->yskip || line < priv->yskip) {
+    return;
+  }
+
+  unsigned short lcd_xoff = priv->canvas_x_triplet + 0x18;
+  *SA7101_LCD_CTRL = SA7101_LCD_CTRL_SET_CURSOR_P4_X_UPPER | (lcd_xoff >> 4);
+  *SA7101_LCD_CTRL = SA7101_LCD_CTRL_SET_CURSOR_P4_X_LOWER | (lcd_xoff & 0xf);
+  *SA7101_LCD_CTRL = SA7101_LCD_CTRL_SET_CURSOR_P4_Y_UPPER | ((priv->canvas_y + line) >> 4);
+  *SA7101_LCD_CTRL = SA7101_LCD_CTRL_SET_CURSOR_P4_Y_LOWER | ((priv->canvas_y + line) & 0xf);
+
+  for (size_t x = 0; x < LCD_WIDTH / 4 - 1; x += 3) {
+
+#if PEANUT_FULL_GBC_SUPPORT
+    if (gb->cgb.cgbMode) {
+      // TODO
+    } else {
+#endif
+      p0 = ((uint32_t *) pixels)[x];
+      p1 = ((uint32_t *) pixels)[x + 1];
+      p2 = ((uint32_t *) pixels)[x + 2];
+      *SA7101_LCD_DATA = COLOR_MAP_4[p0 & 0x3] | (COLOR_MAP_4[(p0 & 0x300) >> 8] << 4) | (COLOR_MAP_4[(p0 & 0x30000) >> 16] << 8);
+      *SA7101_LCD_DATA = COLOR_MAP_4[(p0 & 0x3000000) >> 24] | (COLOR_MAP_4[p1 & 0x3] << 4) | (COLOR_MAP_4[(p1 & 0x300) >> 8] << 8);
+      *SA7101_LCD_DATA = COLOR_MAP_4[(p1 & 0x30000) >> 16] | (COLOR_MAP_4[(p1 & 0x3000000) >> 24] << 4) | (COLOR_MAP_4[p2 & 0x3] << 8);
+      *SA7101_LCD_DATA = COLOR_MAP_4[(p2 & 0x300) >> 8] | (COLOR_MAP_4[(p2 & 0x30000) >> 16] << 4) | (COLOR_MAP_4[(p2 & 0x3000000) >> 24] << 8);
+#if PEANUT_FULL_GBC_SUPPORT
+    }
+#endif
+  }
+
+#if PEANUT_FULL_GBC_SUPPORT
+    if (gb->cgb.cgbMode) {
+      // TODO
+    } else {
+#endif
+      p0 = ((uint32_t *) pixels)[LCD_WIDTH / 4 - 1];
+      *SA7101_LCD_DATA = COLOR_MAP_4[p0 & 0x3] | (COLOR_MAP_4[(p0 & 0x300) >> 8] << 4) | (COLOR_MAP_4[(p0 & 0x30000) >> 16] << 8);
+      *SA7101_LCD_DATA = COLOR_MAP_4[(p0 & 0x3000000) >> 24];
+#if PEANUT_FULL_GBC_SUPPORT
+    }
+#endif
 }
 
 void lcd_draw_line_fast_xrgb(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
@@ -1274,6 +1379,7 @@ static void _load_config(struct priv_s *priv) {
   priv->config.button_hold_compensation_denom = _GetPrivateProfileInt("Config", "ButtonHoldCompensationDenom", 1, CONFIG_PATH) & 0xffff;
   priv->config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, CONFIG_PATH);
   priv->config.sync_rtc_on_resume = !!_GetPrivateProfileInt("Config", "SyncRTCOnResume", 0, CONFIG_PATH);
+  priv->config.l4_lcd_type = !!_GetPrivateProfileInt("Config", "L4LCDType", 0, CONFIG_PATH);
   priv->config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, CONFIG_PATH);
   priv->config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, CONFIG_PATH);
 
@@ -1431,7 +1537,7 @@ int main(void) {
     } else {
       gb_init_lcd(&gb, &lcd_draw_line_fast_rgb565);
     }
-  } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 && !priv.config.debug_force_safe_framebuffer) {
+  } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 && priv.config.l4_lcd_type == 0 && !priv.config.debug_force_safe_framebuffer) {
     /* 4-bit LCD machines don't have a hardware-backed framebuffer and
      * we need to blit a 160x1 buffer to the screen line-by-line. */
     priv.fallback_blit = true;
@@ -1441,6 +1547,23 @@ int main(void) {
     InitGraphic(priv.fb, LCD_WIDTH, 1, LCD_SURFACE_PIXFMT_L4);
     memcpy(priv.fb->palette, PALETTE_P4, sizeof(PALETTE_P4));
     gb_init_lcd(&gb, &lcd_draw_line_fast_p4);
+  } else if (lcd->surface->depth == LCD_SURFACE_PIXFMT_L4 && !priv.config.debug_force_safe_framebuffer) {
+    /* 4-bit LCD machines don't have a hardware-backed framebuffer and
+     * we need to blit a 160x1 buffer to the screen line-by-line. */
+    priv.fb = lcd->surface;
+    priv.rotation = ROTATION_TOP_SIDE_FACING_UP;
+    switch (priv.config.l4_lcd_type) {
+      case 1:
+        gb_init_lcd(&gb, &lcd_draw_line_fast_p4_sa7101_t1);
+        break;
+      case 2:
+        gb_init_lcd(&gb, &lcd_draw_line_fast_p4_sa7101_t2);
+        break;
+      default:
+        messagebox_format(MB_ICON_ERROR | MB_BUTTON_OK, "Invalid L4 LCD type %d", priv.config.l4_lcd_type);
+        exit_cleanup(&gb);
+        return 1;
+    }
   } else {
     if (priv.config.debug_force_safe_framebuffer) {
       MessageBox(_BUL("Forcing safe mode. Expect poor performance."), MB_BUTTON_OK | MB_ICON_WARNING);
@@ -1470,6 +1593,8 @@ int main(void) {
     _sound_on(&gb);
   }
   mutekix_time_init();
+  // Clear the framebuffer so our non-DMA BLIT functions won't leave garbage behind.
+  ClearScreen(false);
 
   _input_poller_begin(&gb);
   loop(&gb);

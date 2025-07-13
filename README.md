@@ -89,6 +89,19 @@ MultiPressMode = 0
 ; issues with some games.
 SyncRTCOnResume = 0
 
+; Select 4-bit LCD type.
+;
+; There are several types of 4-bit LCD panels used by W55SA7101-based grayscale
+; boards, each with protocol incompatible with each other. Use this option to
+; select which LCD driver is ued by the emulator to draw the screen. When set
+; to 0, a fallback line-by-line mode is used which is a bit faster than safe
+; mode.
+;
+; Supported screen variants:
+; - Type 1: The LCD used by CA106 (untested as my unit is bricked).
+; - Type 2: The LCD used by BA101.
+L4LCDType = 0
+
 [Debug]
 ; Show the average number of milliseconds spent on delaying the main loop after
 ; each frame. Updated every 32 frames.
