@@ -163,10 +163,6 @@ const int PALETTE_P4[16] = {
   0xcccccc, 0xdddddd, 0xeeeeee, 0xffffff,
 };
 
-const uint8_t COLOR_MAP_4[4] = {
-  0x0, 0x5, 0xa, 0xf
-};
-
 const uint8_t COLOR_MAP[4] = {
   0xff, 0xaa, 0x55, 0x00
 };
@@ -829,6 +825,32 @@ void lcd_draw_line_fast_p4(struct gb_s *gb, const uint8_t pixels[160], const uin
   _BitBlt(priv->real_fb, priv->canvas_x & 0xfffe, priv->canvas_y + line - priv->yskip, LCD_WIDTH, 1, priv->fb, 0, 0, BLIT_NONE);
 }
 
+#define p0p0 (p0 & 0xf)
+#define p0p1 (p0 & 0xf00)
+#define p0p2 (p0 & 0xf0000)
+#define p0p3 (p0 & 0xf000000)
+#define p1p0 (p1 & 0xf)
+#define p1p1 (p1 & 0xf00)
+#define p1p2 (p1 & 0xf0000)
+#define p1p3 (p1 & 0xf000000)
+#define p2p0 (p2 & 0xf)
+#define p2p1 (p2 & 0xf00)
+#define p2p2 (p2 & 0xf0000)
+#define p2p3 (p2 & 0xf000000)
+
+#define p0p04b (p0p0)
+#define p0p14b ((p0p1) >> 8)
+#define p0p24b ((p0p2) >> 16)
+#define p0p34b ((p0p3) >> 24)
+#define p1p04b (p1p0)
+#define p1p14b ((p1p1) >> 8)
+#define p1p24b ((p1p2) >> 16)
+#define p1p34b ((p1p3) >> 24)
+#define p2p04b (p2p0)
+#define p2p14b ((p2p1) >> 8)
+#define p2p24b ((p2p2) >> 16)
+#define p2p34b ((p2p3) >> 24)
+
 void lcd_draw_line_fast_p4_sa7101_t1(struct gb_s *gb, const uint8_t pixels[160], const uint_fast8_t line) {
   uint32_t p0, p1, p2;
   const struct priv_s * const priv = gb->direct.priv;
@@ -848,13 +870,16 @@ void lcd_draw_line_fast_p4_sa7101_t1(struct gb_s *gb, const uint8_t pixels[160],
       // TODO
     } else {
 #endif
-      p0 = ((uint32_t *) pixels)[x];
-      p1 = ((uint32_t *) pixels)[x + 1];
-      p2 = ((uint32_t *) pixels)[x + 2];
-      *SA7101_LCD_DATA = (COLOR_MAP_4[p0 & 0x3] << 12) | (COLOR_MAP_4[(p0 & 0x300) >> 8] << 7) | (COLOR_MAP_4[(p0 & 0x30000) >> 16] << 1);
-      *SA7101_LCD_DATA = (COLOR_MAP_4[(p0 & 0x3000000) >> 24] << 12) | (COLOR_MAP_4[p1 & 0x3] << 7) | (COLOR_MAP_4[(p1 & 0x300) >> 8] << 1);
-      *SA7101_LCD_DATA = (COLOR_MAP_4[(p1 & 0x30000) >> 16] << 12) | (COLOR_MAP_4[(p1 & 0x3000000) >> 24] << 7) | (COLOR_MAP_4[p2 & 0x3] << 1);
-      *SA7101_LCD_DATA = (COLOR_MAP_4[(p2 & 0x300) >> 8] << 12) | (COLOR_MAP_4[(p2 & 0x30000) >> 16] << 7) | (COLOR_MAP_4[(p2 & 0x3000000) >> 24] << 1);
+      p0 = ((uint32_t *) pixels)[x] & 0x03030303;
+      p1 = ((uint32_t *) pixels)[x + 1] & 0x03030303;
+      p2 = ((uint32_t *) pixels)[x + 2] & 0x03030303;
+      p0 |= p0 << 2;
+      p1 |= p1 << 2;
+      p2 |= p2 << 2;
+      *SA7101_LCD_DATA = (p0p04b << 12) | (p0p14b << 7) | (p0p24b << 1);
+      *SA7101_LCD_DATA = (p0p34b << 12) | (p1p04b << 7) | (p1p14b << 1);
+      *SA7101_LCD_DATA = (p1p24b << 12) | (p1p34b << 7) | (p2p04b << 1);
+      *SA7101_LCD_DATA = (p2p14b << 12) | (p2p24b << 7) | (p2p34b << 1);
 #if PEANUT_FULL_GBC_SUPPORT
     }
 #endif
@@ -865,9 +890,10 @@ void lcd_draw_line_fast_p4_sa7101_t1(struct gb_s *gb, const uint8_t pixels[160],
       // TODO
     } else {
 #endif
-      p0 = ((uint32_t *) pixels)[LCD_WIDTH / 4 - 1];
-      *SA7101_LCD_DATA = (COLOR_MAP_4[p0 & 0x3] << 12) | (COLOR_MAP_4[(p0 & 0x300) >> 8] << 7) | (COLOR_MAP_4[(p0 & 0x30000) >> 16] << 1);
-      *SA7101_LCD_DATA = (COLOR_MAP_4[(p0 & 0x3000000) >> 24] << 12);
+      p0 = ((uint32_t *) pixels)[LCD_WIDTH / 4 - 1] & 0x03030303;
+      p0 |= p0 << 2;
+      *SA7101_LCD_DATA = (p0p04b << 12) | (p0p14b << 7) | (p0p24b << 1);
+      *SA7101_LCD_DATA = (p0p34b << 12);
 #if PEANUT_FULL_GBC_SUPPORT
     }
 #endif
@@ -894,13 +920,16 @@ void lcd_draw_line_fast_p4_sa7101_t2(struct gb_s *gb, const uint8_t pixels[160],
       // TODO
     } else {
 #endif
-      p0 = ((uint32_t *) pixels)[x];
-      p1 = ((uint32_t *) pixels)[x + 1];
-      p2 = ((uint32_t *) pixels)[x + 2];
-      *SA7101_LCD_DATA = COLOR_MAP_4[p0 & 0x3] | (COLOR_MAP_4[(p0 & 0x300) >> 8] << 4) | (COLOR_MAP_4[(p0 & 0x30000) >> 16] << 8);
-      *SA7101_LCD_DATA = COLOR_MAP_4[(p0 & 0x3000000) >> 24] | (COLOR_MAP_4[p1 & 0x3] << 4) | (COLOR_MAP_4[(p1 & 0x300) >> 8] << 8);
-      *SA7101_LCD_DATA = COLOR_MAP_4[(p1 & 0x30000) >> 16] | (COLOR_MAP_4[(p1 & 0x3000000) >> 24] << 4) | (COLOR_MAP_4[p2 & 0x3] << 8);
-      *SA7101_LCD_DATA = COLOR_MAP_4[(p2 & 0x300) >> 8] | (COLOR_MAP_4[(p2 & 0x30000) >> 16] << 4) | (COLOR_MAP_4[(p2 & 0x3000000) >> 24] << 8);
+      p0 = ((uint32_t *) pixels)[x] & 0x03030303;
+      p1 = ((uint32_t *) pixels)[x + 1] & 0x03030303;
+      p2 = ((uint32_t *) pixels)[x + 2] & 0x03030303;
+      p0 |= p0 << 2;
+      p1 |= p1 << 2;
+      p2 |= p2 << 2;
+      *SA7101_LCD_DATA = p0p04b | (p0p14b << 4) | (p0p24b << 8);
+      *SA7101_LCD_DATA = p0p34b | (p1p04b << 4) | (p1p14b << 8);
+      *SA7101_LCD_DATA = p1p24b | (p1p34b << 4) | (p2p04b << 8);
+      *SA7101_LCD_DATA = p2p14b | (p2p24b << 4) | (p2p34b << 8);
 #if PEANUT_FULL_GBC_SUPPORT
     }
 #endif
@@ -911,9 +940,10 @@ void lcd_draw_line_fast_p4_sa7101_t2(struct gb_s *gb, const uint8_t pixels[160],
       // TODO
     } else {
 #endif
-      p0 = ((uint32_t *) pixels)[LCD_WIDTH / 4 - 1];
-      *SA7101_LCD_DATA = COLOR_MAP_4[p0 & 0x3] | (COLOR_MAP_4[(p0 & 0x300) >> 8] << 4) | (COLOR_MAP_4[(p0 & 0x30000) >> 16] << 8);
-      *SA7101_LCD_DATA = COLOR_MAP_4[(p0 & 0x3000000) >> 24];
+      p0 = ((uint32_t *) pixels)[LCD_WIDTH / 4 - 1] & 0x03030303;
+      p0 |= p0 << 2;
+      *SA7101_LCD_DATA = p0p04b | (p0p14b << 4) | (p0p24b << 8);
+      *SA7101_LCD_DATA = p0p34b;
 #if PEANUT_FULL_GBC_SUPPORT
     }
 #endif
