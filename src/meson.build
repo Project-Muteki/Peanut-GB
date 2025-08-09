@@ -8,7 +8,8 @@ wb = executable('wb',
   dependencies: mutekix_lib,
   link_with : ext_lib,
   install : false,
-  c_args: ['-DMINIGB_APU_AUDIO_FORMAT_S16SYS'])
+  c_args: ['-DMINIGB_APU_AUDIO_FORMAT_S16SYS'],
+  link_args: ['-Wl,--gc-sections'])
 
 wbc = executable('wbc',
   'main.c',
@@ -18,7 +19,7 @@ wbc = executable('wbc',
   link_with : ext_cgb_lib,
   install : false,
   c_args: ['-DPEANUT_FULL_GBC_SUPPORT=1', '-DMINIGB_APU_AUDIO_FORMAT_S16SYS'],
-  build_by_default: true)
+  link_args: ['-Wl,--gc-sections'])
 
 if romtool.found() and elf2bestape.found()
   romspec = custom_target('romspec',

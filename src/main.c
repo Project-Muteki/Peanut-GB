@@ -20,8 +20,9 @@
 #include <muteki/ui/views/filepicker.h>
 #include <muteki/ui/views/messagebox.h>
 
-#include <mutekix/threading.h>
 #include <mutekix/time.h>
+
+#include <osdep/abi.h>
 
 #define ENABLE_SOUND 1
 
@@ -140,21 +141,6 @@ static unsigned int _map_emu_key_state(unsigned short key);
 static uint8_t _map_pad_state(unsigned short key);
 static void exit_cleanup(const struct gb_s * const gb);
 static int messagebox_format(unsigned short type, const char *fmt, ...);
-
-static mutekix_thread_arg_t audio_worker_arg = {
-  .func = &_audio_worker,
-  .user_data = NULL,
-};
-
-static mutekix_thread_arg_t input_dis_worker_arg = {
-  .func = &_input_dis_worker,
-  .user_data = NULL,
-};
-
-static mutekix_thread_arg_t input_s3c_worker_arg = {
-  .func = &_input_s3c_worker,
-  .user_data = NULL,
-};
 
 const int PALETTE_P4[16] = {
   0x000000, 0x111111, 0x222222, 0x333333,
@@ -399,6 +385,11 @@ static int _audio_worker(void *user_data) {
   return 0;
 }
 
+APCS_WRAPPER_STATIC(audio_worker_thread_entry, va, int, void *) {
+  void *user_data = va_arg(va, void *);
+  return _audio_worker(user_data);
+}
+
 static int _input_dis_worker(void *user_data) {
   (void) user_data;
 
@@ -415,6 +406,11 @@ static int _input_dis_worker(void *user_data) {
   return 0;
 }
 
+APCS_WRAPPER_STATIC(input_dis_worker_thread_entry, va, int, void *) {
+  void *user_data = va_arg(va, void *);
+  return _input_dis_worker(user_data);
+}
+
 static int _input_s3c_worker(void *user_data) {
   (void) user_data;
 
@@ -429,6 +425,11 @@ static int _input_s3c_worker(void *user_data) {
   OSSetEvent(input_poller_shutdown_ack);
 
   return 0;
+}
+
+APCS_WRAPPER_STATIC(input_s3c_worker_thread_entry, va, int, void *) {
+  void *user_data = va_arg(va, void *);
+  return _input_s3c_worker(user_data);
 }
 
 static inline void _drain_all_events(void) {
@@ -455,7 +456,7 @@ static void _input_poller_begin(struct gb_s *gb) {
       GetSysKeyState(&priv->old_hold_cfg);
 
       input_poller_shutdown_ack = OSCreateEvent(true, 1);
-      input_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &input_dis_worker_arg, 16384, false);
+      input_worker_inst = OSCreateThread(&input_dis_worker_thread_entry, NULL, 16384, false);
 
       SetSysKeyState(&KEY_EVENT_CONFIG_TURBO);
       OSSleep(1);
@@ -464,7 +465,7 @@ static void _input_poller_begin(struct gb_s *gb) {
       GetSysKeyState(&priv->old_hold_cfg);
 
       input_poller_shutdown_ack = OSCreateEvent(true, 1);
-      input_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &input_s3c_worker_arg, 16384, false);
+      input_worker_inst = OSCreateThread(&input_s3c_worker_thread_entry, NULL, 16384, false);
 
       SetSysKeyState(&KEY_EVENT_CONFIG_SUPPRESS);
       OSSleep(1);
@@ -512,7 +513,7 @@ static void _sound_on(struct gb_s *gb) {
       return;
     }
     audio_shutdown_ack = OSCreateEvent(true, 1);
-    audio_worker_inst = OSCreateThread(&mutekix_thread_wrapper, &audio_worker_arg, 16384, false);
+    audio_worker_inst = OSCreateThread(&audio_worker_thread_entry, NULL, 16384, false);
     OSSleep(1);
     priv->sound_on = true;
   }
