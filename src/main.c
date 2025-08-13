@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <inttypes.h>
 #include <muteki/ui/common.h>
 #include <stdarg.h>
@@ -178,7 +179,9 @@ uint32_t *color_map_cgb_32 = NULL;
 
 const char SAVE_FILE_SUFFIX[] = ".sav";
 
-const char CONFIG_PATH[] = "C:\\SYSTEM\\muteki\\pgbcfg.ini";
+const char CONFIG_PATH[] = "C:\\APPS\\woodyboy\\wb.ini";
+const char CONFIG_PATH_LEGACY[] = "C:\\SYSTEM\\muteki\\pgbcfg.ini";
+const char BOOT_ROM_PATH[] = "C:\\APPS\\woodyboy\\dmg_boot.bin";
 
 const key_press_event_config_t KEY_EVENT_CONFIG_DRAIN = {65535, 65535, 1};
 const key_press_event_config_t KEY_EVENT_CONFIG_SUPPRESS = {65535, 65535, 0};
@@ -220,6 +223,7 @@ struct priv_s {
   uint8_t *rom;
   /* Pointer to allocated memory holding save file. */
   uint8_t *cart_ram;
+  uint8_t *boot_rom;
   size_t cart_ram_size;
 
   /* Framebuffer objects. */
@@ -1102,6 +1106,11 @@ void gb_cart_ram_write(struct gb_s *gb, const uint_fast32_t addr, const uint8_t 
   priv->cart_ram[addr] = val;
 }
 
+uint8_t gb_bootrom_read(struct gb_s *gb, const uint_fast16_t addr) {
+  const struct priv_s * const priv = gb->direct.priv;
+  return priv->boot_rom[addr];
+}
+
 void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr) {
   const char *gb_err_str[GB_INVALID_MAX] = {
     "UNKNOWN",
@@ -1401,6 +1410,62 @@ static void loop(struct gb_s * const gb) {
   }
 }
 
+static void migrate_config(void) {
+  struct stat st;
+  if (!stat(CONFIG_PATH, &st)) {
+    return;
+  }
+  if (errno != ENOENT) {
+    MessageBox(_BUL("Config auto migration failed: target file is in unknown state."), MB_DEFAULT);
+    return;
+  }
+
+  if (!stat(CONFIG_PATH_LEGACY, &st)) {
+    if ((st.st_mode & S_IFREG) == S_IFREG) {
+      size_t file_size = st.st_size;
+      int result = mkdir("C:\\APPS\\woodyboy", 0755);
+      if (result != 0 && errno != EEXIST) {
+        MessageBox(_BUL("Config auto migration failed: unable to make new directory."), MB_DEFAULT);
+        return;
+      }
+      FILE *fsrc = fopen(CONFIG_PATH_LEGACY, "rb");
+      if (fsrc == NULL) {
+        MessageBox(_BUL("Config auto migration failed: unable to open source file."), MB_DEFAULT);
+        return;
+      }
+      FILE *fdst = fopen(CONFIG_PATH, "wb");
+      if (fdst == NULL) {
+        MessageBox(_BUL("Config auto migration failed: unable to open destination file."), MB_DEFAULT);
+        fclose(fsrc);
+        return;
+      }
+      unsigned char *csrc = malloc(file_size);
+      if (csrc == NULL) {
+        MessageBox(_BUL("Config auto migration failed: failed to allocate memory."), MB_DEFAULT);
+        fclose(fsrc);
+        fclose(fdst);
+        return;
+      }
+      if (fread(csrc, 1, file_size, fsrc) != file_size) {
+        MessageBox(_BUL("Config auto migration failed: failed to read file."), MB_DEFAULT);
+        fclose(fsrc);
+        fclose(fdst);
+        free(csrc);
+        return;
+      }
+      if (fwrite(csrc, 1, file_size, fdst) != file_size) {
+        MessageBox(_BUL("Config auto migration failed: failed to write file."), MB_DEFAULT);
+      } else {
+        MessageBox(_BUL("Config auto migration has been performed."), MB_DEFAULT);
+      }
+      fclose(fsrc);
+      fclose(fdst);
+      free(csrc);
+      return;
+    }
+  }
+}
+
 static void _load_config(struct priv_s *priv) {
   priv->config.enable_audio = !!_GetPrivateProfileInt("Config", "EnableAudio", 1, CONFIG_PATH);
   priv->config.interlace = !!_GetPrivateProfileInt("Config", "Interlace", 0, CONFIG_PATH);
@@ -1449,6 +1514,7 @@ int main(void) {
   static struct gb_s gb;
   static struct priv_s priv = {0};
 
+  migrate_config();
   _load_config(&priv);
   _load_key_binding();
 
@@ -1476,6 +1542,8 @@ int main(void) {
     PRINT_NONE
   );
 
+  priv.boot_rom = _read_file(BOOT_ROM_PATH, 0, false);
+
   priv.rom = _read_file(priv.rom_file_name, 0, false);
   if (priv.rom == NULL) {
     return 1;
@@ -1502,6 +1570,11 @@ int main(void) {
     exit_cleanup(&gb);
     return 1;
   }
+  }
+
+  if (priv.boot_rom != NULL) {
+    gb_set_bootrom(&gb, &gb_bootrom_read);
+    gb_reset(&gb);
   }
 
   _set_rtc(&gb);
@@ -1646,10 +1719,15 @@ static void exit_cleanup(const struct gb_s * const gb) {
     free(priv->rom);
     priv->rom = NULL;
   }
-  
+
   if (priv->cart_ram != NULL) {
     free(priv->cart_ram);
     priv->cart_ram = NULL;
+  }
+
+  if (priv->boot_rom != NULL) {
+    free(priv->boot_rom);
+    priv->boot_rom = NULL;
   }
 
   if (priv->fallback_blit) {

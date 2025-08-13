@@ -8,7 +8,7 @@ Copyright (c) 2018-2025 Mahyar Koshkouei
 Copyright (c) 2024-2025 dogtopus
 SPDX-License-Identifier: MIT\
 """
-version = "1.3.1"
+version = "1.4.0"
 
 [metadata.en]
 title = "WoodyBoy"
