@@ -33,7 +33,7 @@ A Game Boy emulator running on Besta RTOS, based on Peanut-GB.
 
 ## Configuration
 
-To configure the emulator, create an ASCII-encoded, Windows line-ending INI file named `pgbcfg.ini` under `C:\SYSTEM\muteki` (create one if it does not already exist).
+To configure the emulator, create an ASCII-encoded, Windows line-ending INI file named `wb.ini` under `C:\APPS\woodyboy` (create one if it does not already exist).
 
 Supported options are as follows:
 
@@ -102,8 +102,8 @@ SyncRTCOnResume = 0
 ; - Type 2: The LCD used by CA106 (untested as my unit is bricked).
 L4LCDType = 0
 
-; Use boot ROM if the file is available (dmg_boot.bin for DMG mode and
-; cgb_boot.bin for CGB mode [wbc only])
+; Use boot ROM if the file is available under the config directory
+; (dmg_boot.bin for DMG mode and cgb_boot.bin for CGB mode [wbc only])
 UseBootROM = 1
 
 [Debug]
