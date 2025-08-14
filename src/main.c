@@ -182,6 +182,9 @@ const char SAVE_FILE_SUFFIX[] = ".sav";
 const char CONFIG_PATH[] = "C:\\APPS\\woodyboy\\wb.ini";
 const char CONFIG_PATH_LEGACY[] = "C:\\SYSTEM\\muteki\\pgbcfg.ini";
 const char BOOT_ROM_PATH[] = "C:\\APPS\\woodyboy\\dmg_boot.bin";
+#if PEANUT_FULL_GBC_SUPPORT
+const char BOOT_ROM_CGB_PATH[] = "C:\\APPS\\woodyboy\\cgb_boot.bin";
+#endif
 
 const key_press_event_config_t KEY_EVENT_CONFIG_DRAIN = {65535, 65535, 1};
 const key_press_event_config_t KEY_EVENT_CONFIG_SUPPRESS = {65535, 65535, 0};
@@ -214,6 +217,7 @@ struct priv_config_s {
   bool half_refresh;
   bool sram_auto_commit;
   bool sync_rtc_on_resume;
+  bool use_boot_rom;
   bool debug_show_delay_factor;
   bool debug_force_safe_framebuffer;
 };
@@ -1476,6 +1480,7 @@ static void _load_config(struct priv_s *priv) {
   priv->config.multi_press_mode = _GetPrivateProfileInt("Config", "MultiPressMode", MULTI_PRESS_MODE_DIS, CONFIG_PATH);
   priv->config.sync_rtc_on_resume = !!_GetPrivateProfileInt("Config", "SyncRTCOnResume", 0, CONFIG_PATH);
   priv->config.l4_lcd_type = !!_GetPrivateProfileInt("Config", "L4LCDType", 0, CONFIG_PATH);
+  priv->config.use_boot_rom = !!_GetPrivateProfileInt("Config", "UseBootROM", 1, CONFIG_PATH);
   priv->config.debug_show_delay_factor = !!_GetPrivateProfileInt("Debug", "ShowDelayFactor", 0, CONFIG_PATH);
   priv->config.debug_force_safe_framebuffer = !!_GetPrivateProfileInt("Debug", "ForceSafeFramebuffer", 0, CONFIG_PATH);
 
@@ -1542,8 +1547,6 @@ int main(void) {
     PRINT_NONE
   );
 
-  priv.boot_rom = _read_file(BOOT_ROM_PATH, 0, false);
-
   priv.rom = _read_file(priv.rom_file_name, 0, false);
   if (priv.rom == NULL) {
     return 1;
@@ -1572,7 +1575,12 @@ int main(void) {
   }
   }
 
-  if (priv.boot_rom != NULL) {
+#if PEANUT_FULL_GBC_SUPPORT
+  priv.boot_rom = _read_file(gb.cgb.cgbMode ? BOOT_ROM_CGB_PATH : BOOT_ROM_PATH, 0, false);
+#else
+  priv.boot_rom = _read_file(BOOT_ROM_PATH, 0, false);
+#endif
+  if (priv.config.use_boot_rom && priv.boot_rom != NULL) {
     gb_set_bootrom(&gb, &gb_bootrom_read);
     gb_reset(&gb);
   }

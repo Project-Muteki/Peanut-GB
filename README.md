@@ -102,6 +102,10 @@ SyncRTCOnResume = 0
 ; - Type 2: The LCD used by CA106 (untested as my unit is bricked).
 L4LCDType = 0
 
+; Use boot ROM if the file is available (dmg_boot.bin for DMG mode and
+; cgb_boot.bin for CGB mode [wbc only])
+UseBootROM = 1
+
 [Debug]
 ; Show the average number of milliseconds spent on delaying the main loop after
 ; each frame. Updated every 32 frames.
